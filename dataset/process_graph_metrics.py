@@ -5,8 +5,8 @@ from sklearn.preprocessing import StandardScaler
 def main():
 
     chain = 'polygon'
-    graphs1 = pd.read_csv(f'../../_data/result/{chain}_basic_metrics.csv')
-    graphs2 = pd.read_csv(f'../../_data/result/{chain}_advanced_metrics_labels.csv')
+    graphs1 = pd.read_csv(f'../../_data/results/{chain}_basic_metrics.csv')
+    graphs2 = pd.read_csv(f'../../_data/results/{chain}_advanced_metrics_labels.csv')
     
     features = pd.merge(graphs1, graphs2, on='Contract')
     

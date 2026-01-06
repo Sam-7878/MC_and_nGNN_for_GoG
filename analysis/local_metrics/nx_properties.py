@@ -27,7 +27,7 @@ def main():
     chain_labels = pd.read_csv(f'../../_data/data/labels.csv').query('Chain == @chain')
     chain_class = list(chain_labels.Contract.values)
 
-    output_file = '../../_data/result/'
+    output_file = '../../_data/results/'
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
     stats = []
@@ -49,7 +49,7 @@ def main():
         except Exception as e:
             print(f'Error for address {addr}: {e}')
     
-    pd.DataFrame(stats).to_csv(f'../../_data/result/{chain}_basic_metrics.csv', index=False)
+    pd.DataFrame(stats).to_csv(f'../../_data/results/{chain}_basic_metrics.csv', index=False)
 
 if __name__ == "__main__":
     main()
