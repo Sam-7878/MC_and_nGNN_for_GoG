@@ -18,7 +18,7 @@
 #     for seed in seeds:
 #         torch.manual_seed(seed)
 #         np.random.seed(seed)
-#         root_path = f'../../../_data/GoG/edges/{args.chain}' # read in data folder
+#         root_path = f'../../_data/GoG/edges/{args.chain}' # read in data folder
 
 #         train_data = TransactionEdgeDataset(root=root_path, chain=args.chain, use_train=True)
 #         test_data = TransactionEdgeDataset(root=root_path, chain=args.chain, use_train=False)
@@ -114,7 +114,7 @@ def train_test(model_class, args):
     for seed in seeds:
         torch.manual_seed(seed)
         np.random.seed(seed)
-        root_path = f'../../../_data/GoG/edges/{args.chain}' 
+        root_path = f'../../_data/GoG/edges/{args.chain}' 
 
         train_data = TransactionEdgeDataset(root=root_path, chain=args.chain, use_train=True)
         test_data = TransactionEdgeDataset(root=root_path, chain=args.chain, use_train=False)

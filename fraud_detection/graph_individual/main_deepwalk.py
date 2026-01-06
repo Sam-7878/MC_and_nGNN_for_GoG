@@ -65,7 +65,7 @@ def main():
     y = load_labels(filepath)
     
     graph_embeddings = []
-    embedding_path = f'../../../_data/data/Deepwalk/{chain}'
+    embedding_path = f'../../_data/data/Deepwalk/{chain}'
     
     processed_graphs = 0
     

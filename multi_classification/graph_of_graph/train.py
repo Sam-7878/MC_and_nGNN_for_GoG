@@ -58,8 +58,8 @@ class SEALCITrainer(object):
         self.macro_graph_edges = self.macro_graph_edges.to(self.args.device)
 
     def _load_split(self):
-        self.train_indices = self.read_in_file(f'../../../_data/GoG/node/{self.args.chain}_train_index_{self.args.num_classes}.txt')
-        self.test_indices = self.read_in_file(f'../../../_data/GoG/node/{self.args.chain}_test_index_{self.args.num_classes}.txt')
+        self.train_indices = self.read_in_file(f'../../_data/GoG/node/{self.args.chain}_train_index_{self.args.num_classes}.txt')
+        self.test_indices = self.read_in_file(f'../../_data/GoG/node/{self.args.chain}_test_index_{self.args.num_classes}.txt')
 
         # Calculate and print the number of labels per class in each dataset
         train_labels = [self.dataset_generator.target[idx].item() for idx in self.train_indices]

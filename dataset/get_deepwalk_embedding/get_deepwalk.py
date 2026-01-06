@@ -26,7 +26,7 @@ def process_graph(idx, data, embedding_dim, chain):
     deepwalk = DeepWalk(G, walk_length=20, num_walks=40, embedding_dim=embedding_dim)
     model = deepwalk.train(deepwalk.generate_walks())
     node_embeddings = np.array([model.wv[str(node)] for node in G.nodes()])
-    np.save(f'../../../_data/data/Deepwalk/{chain}/{idx}.npy', node_embeddings)
+    np.save(f'../../_data/data/Deepwalk/{chain}/{idx}.npy', node_embeddings)
     del G, deepwalk, model, node_embeddings 
     gc.collect()
 
@@ -38,14 +38,14 @@ def main():
     args = parameter_parser()
     
     # Setting the graph directory
-    graphs_directory = f"../../../_data/GoG/{args.chain}/"
+    graphs_directory = f"../../_data/GoG/{args.chain}/"
 
     dataset_generator = GraphDatasetGenerator(graphs_directory)
     data_list = dataset_generator.get_pyg_data_list()
     embedding_dim = args.embedding_dim
     chain = args.chain
 
-    os.makedirs(os.path.dirname(f'../../../_data/data/Deepwalk/{chain}/'), exist_ok=True)
+    os.makedirs(os.path.dirname(f'../../_data/data/Deepwalk/{chain}/'), exist_ok=True)
 
     numbers = list(range(0, len(data_list)))
 

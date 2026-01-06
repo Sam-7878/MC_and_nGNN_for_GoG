@@ -11,12 +11,12 @@ def parameter_parser():
                         help="Type of the graph model to run.")
     parser.add_argument("--graphs",
                         nargs="?",
-                        default="../../../_data/GoG/polygon/",
+                        default="../../_data/GoG/polygon/",
 	                help="Folder with training graph jsons.")
 
     parser.add_argument("--hierarchical-graph",
                         nargs="?",
-                        default="../../../_data/GoG/polygon/edges/global_edges.csv",
+                        default="../../_data/GoG/polygon/edges/global_edges.csv",
 	                help="Hierarchical edge list.")
                     
     parser.add_argument("--epochs", type=int, default=20, help="Number of training epochs.")

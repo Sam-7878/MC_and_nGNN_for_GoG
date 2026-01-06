@@ -37,17 +37,17 @@ def compute_metrics(G):
 def main():
     chain = 'polygon'
 
-    chain_labels = pd.read_csv(f'../../../_data/data/labels.csv').query('Chain == @chain')
+    chain_labels = pd.read_csv(f'../../_data/data/labels.csv').query('Chain == @chain')
     chain_class = list(chain_labels.Contract.values)
 
-    output_file = '../../../_data/result/'
+    output_file = '../../_data/result/'
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
 
     stats = []
     for addr in tqdm(chain_class):
         try:
-            tx = pd.read_csv(f'../../../_data/data/transactions/{chain}/{addr}.csv')
+            tx = pd.read_csv(f'../../_data/data/transactions/{chain}/{addr}.csv')
             tx['timestamp'] = pd.to_datetime(tx['timestamp'], unit='s')
             end_date = pd.Timestamp('2024-03-01')
             tx = tx[tx['timestamp'] < end_date]
@@ -64,7 +64,7 @@ def main():
             print(f'Error for address {addr}: {e}')
 
     df = pd.DataFrame(stats)
-    df.to_csv(f'../../../_data/result/{chain}_advanced_metrics_labels.csv', index=False)
+    df.to_csv(f'../../_data/result/{chain}_advanced_metrics_labels.csv', index=False)
 
 if __name__ == "__main__":
     main()
