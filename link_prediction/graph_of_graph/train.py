@@ -21,8 +21,8 @@ class Trainer(object):
 
 
     def _load_macro_graph(self):
-        train_path =  f'../../GoG/edges/{self.args.chain}/{self.args.chain}_train_edges.txt' 
-        test_path = f'../../GoG/edges/{self.args.chain}/{self.args.chain}_test_edges.txt' 
+        train_path =  f'../../../_data/GoG/edges/{self.args.chain}/{self.args.chain}_train_edges.txt' 
+        test_path = f'../../../_data/GoG/edges/{self.args.chain}/{self.args.chain}_test_edges.txt' 
         
         train_edges = pd.read_csv(train_path, sep=' ', header=None, names=['node1', 'node2', 'label'])
         test_edges = pd.read_csv(test_path, sep=' ', header=None, names=['node1', 'node2', 'label'])

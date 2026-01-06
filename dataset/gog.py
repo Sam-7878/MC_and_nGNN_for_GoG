@@ -74,7 +74,7 @@ if __name__ == "__main__":
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
     chain = 'polygon'
-    labels = pd.read_csv('../data/labels.csv').query('Chain == @chain').reset_index(drop=True)
+    labels = pd.read_csv('../../_data/data/labels.csv').query('Chain == @chain').reset_index(drop=True)
 
     ### Use three-class as an example.
     n = 3
@@ -85,10 +85,10 @@ if __name__ == "__main__":
     select_address = list(labels.query('Category in @select_class').Contract.values)
 
     # read in full global_graph
-    contract_mapping_file = f'../data/global_graph/{chain}_contract_to_number_mapping.json'
+    contract_mapping_file = f'../../_data/data/global_graph/{chain}_contract_to_number_mapping.json'
     contract_to_number = load_contract_mapping(contract_mapping_file)
     number_to_contract = {v: k for k, v in contract_to_number.items()}
-    global_graph = pd.read_csv(f'../data/global_graph/{chain}_graph_more_than_1_ratio.csv') 
+    global_graph = pd.read_csv(f'../../_data/data/global_graph/{chain}_graph_more_than_1_ratio.csv') 
 
     global_graph['Contract1'] = global_graph['Contract1'].apply(lambda x: number_to_contract[x])
     global_graph['Contract2'] = global_graph['Contract2'].apply(lambda x: number_to_contract[x])
@@ -100,11 +100,11 @@ if __name__ == "__main__":
     # read in transaction data
     transaction_dfs_select = []
     for i in tqdm(labels_select_df.Contract.values):
-        tx = pd.read_csv(f'../data/transactions/{chain}/{i}.csv')
+        tx = pd.read_csv(f'../../_data/data/transactions/{chain}/{i}.csv')
         tx['date'] = pd.to_datetime(tx['timestamp'], unit='s')
         transaction_dfs_select.append(tx)
 
-    directory = f'../GoG/{chain}'
+    directory = f'../../_data/GoG/{chain}'
     for idx, (df, label) in enumerate(zip(transaction_dfs_select, labels_select)):
         save_transaction_graph(df, label, idx, directory)
 
@@ -113,8 +113,8 @@ if __name__ == "__main__":
     global_graph_select['graph_1'] = global_graph_select['Contract1'].apply(lambda x: int(all_address_index[x]))
     global_graph_select['graph_2'] = global_graph_select['Contract2'].apply(lambda x: int(all_address_index[x]))
 
-    os.makedirs(f'../GoG/{chain}/edges/', exist_ok=True)
-    global_graph_select[['graph_1', 'graph_2']].to_csv(f'../GoG/{chain}/edges/global_edges.csv', index = 0)
+    os.makedirs(f'../../_data/GoG/{chain}/edges/', exist_ok=True)
+    global_graph_select[['graph_1', 'graph_2']].to_csv(f'../../_data/GoG/{chain}/edges/global_edges.csv', index = 0)
     
     
 

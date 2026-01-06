@@ -90,7 +90,7 @@ if __name__ == "__main__":
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
     chain = 'polygon'
-    labels = pd.read_csv('../data/labels.csv').query('Chain == @chain')
+    labels = pd.read_csv('../../_data/data/labels.csv').query('Chain == @chain')
 
     # Use three-class as an example.
     n = 3
@@ -106,7 +106,7 @@ if __name__ == "__main__":
     # read in transaction data
     transaction_dfs_select = []
     for i in tqdm(labels_select_df.Contract.values):
-        tx = pd.read_csv(f'../data/transactions/{chain}/{i}.csv')
+        tx = pd.read_csv(f'../../_data/data/transactions/{chain}/{i}.csv')
         tx['date'] = pd.to_datetime(tx['timestamp'], unit='s')
         transaction_dfs_select.append(tx)
 
@@ -114,7 +114,7 @@ if __name__ == "__main__":
 
     all_address_index = dict(zip(labels_select_df.Contract, labels_select_df.index))
     
-    dataset = TransactionDataset(root=f'../data/GCN/{chain}', 
+    dataset = TransactionDataset(root=f'../../_data/data/GCN/{chain}', 
                                 transaction_dfs=transaction_dfs_select, 
                                 labels=list(labels_select_df.Category.values),
                                 contract_addresses=list(labels_select_df.Contract.values),

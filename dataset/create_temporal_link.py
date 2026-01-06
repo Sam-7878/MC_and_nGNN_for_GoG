@@ -47,13 +47,13 @@ def generate_train_test_data(edges_with_timestamps_sorted, chain):
     test_negative_edges = test_non_edges[:len(test_data)]
 
     # Save train and test edges with labels
-    with open(f'../GoG/edges/{chain}/{chain}_train_edges.txt', 'w') as f:
+    with open(f'../../_data/GoG/edges/{chain}/{chain}_train_edges.txt', 'w') as f:
         for edge in train_data[['graph_1', 'graph_2']].itertuples(index=False):
             f.write(f"{edge.graph_1} {edge.graph_2} 1\n")
         for edge in train_negative_edges:
             f.write(f"{edge[0]} {edge[1]} 0\n")
 
-    with open(f'../GoG/edges/{chain}/{chain}_test_edges.txt', 'w') as f:
+    with open(f'../../_data/GoG/edges/{chain}/{chain}_test_edges.txt', 'w') as f:
         for edge in test_data[['graph_1', 'graph_2']].itertuples(index=False):
             f.write(f"{edge.graph_1} {edge.graph_2} 1\n")
         for edge in test_negative_edges:
@@ -62,15 +62,15 @@ def generate_train_test_data(edges_with_timestamps_sorted, chain):
 def main():
     chain = 'polygon'
 
-    os.makedirs(os.path.dirname(f'../GoG/edges/{chain}/'), exist_ok=True)
+    os.makedirs(os.path.dirname(f'../../_data/GoG/edges/{chain}/'), exist_ok=True)
 
-    chain_labels = pd.read_csv(f'../data/labels.csv').query('Chain == @chain')
+    chain_labels = pd.read_csv(f'../../_data/data/labels.csv').query('Chain == @chain')
     chain_class = list(chain_labels.Contract.values)
 
     # create timestamps
     stats = []
     for addr in chain_class:
-        tx = pd.read_csv(f'../data/transactions/{chain}/{addr}.csv')
+        tx = pd.read_csv(f'../../_data/data/transactions/{chain}/{addr}.csv')
         first_timestamp = tx['timestamp'].min()
         stats.append({'address': addr, 'first_timestamp': first_timestamp})
         
@@ -80,7 +80,7 @@ def main():
     all_address = list(chain_labels.Contract.values)
     index_mapping = {addr: idx for idx, addr in enumerate(all_address)}
 
-    edges = pd.read_csv(f'../GoG/{chain}/edges/global_edges.csv')
+    edges = pd.read_csv(f'../../_data/GoG/{chain}/edges/global_edges.csv')
     edges_with_timestamps_sorted = process_data(chain, timestamps, index_mapping, edges)
 
     generate_train_test_data(edges_with_timestamps_sorted, chain)

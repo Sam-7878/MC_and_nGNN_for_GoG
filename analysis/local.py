@@ -13,17 +13,17 @@ warnings.filterwarnings("ignore")
 
 
 # read in files include local graph properties
-polygon_graphs = pd.merge(pd.read_csv('../result/polygon_basic_metrics.csv'),\
-                        pd.read_csv('../result/polygon_advanced_metrics_labels.csv'), 
+polygon_graphs = pd.merge(pd.read_csv('../../_data/result/polygon_basic_metrics.csv'),\
+                        pd.read_csv('../../_data/result/polygon_advanced_metrics_labels.csv'), 
                         on = 'Contract') 
 
-ethereum_graphs = pd.merge(pd.read_csv('../result/ethereum_basic_metrics.csv'),\
-                        pd.read_csv('../result/ethereum_advanced_metrics_labels.csv'), 
+ethereum_graphs = pd.merge(pd.read_csv('../../_data/result/ethereum_basic_metrics.csv'),\
+                        pd.read_csv('../../_data/result/ethereum_advanced_metrics_labels.csv'), 
                         on = 'Contract')
 
 
-bnb_graphs =  pd.merge(pd.read_csv('../result/bnb_basic_metrics.csv'),\
-                        pd.read_csv('../result/bnb_advanced_metrics_labels.csv'), 
+bnb_graphs =  pd.merge(pd.read_csv('../../_data/result/bnb_basic_metrics.csv'),\
+                        pd.read_csv('../../_data/result/bnb_advanced_metrics_labels.csv'), 
                         on = 'Contract')
 
 

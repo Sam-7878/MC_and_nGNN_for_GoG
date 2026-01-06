@@ -58,11 +58,11 @@ def run_model(detector, data, seeds):
 def main():
     args = Args()
     chain = 'bnb'
-    dataset_generator = GraphDatasetGenerator(f'../data/features/{chain}_basic_metrics_processed.csv')
+    dataset_generator = GraphDatasetGenerator(f'../../_data/data/features/{chain}_basic_metrics_processed.csv')
     data_list = dataset_generator.get_pyg_data_list()
 
     x = torch.cat([data.x for data in data_list], dim=0)
-    hierarchical_graph = hierarchical_graph_reader(f'../../GoG/{chain}/edges/global_edges.csv')
+    hierarchical_graph = hierarchical_graph_reader(f'../../../_data/GoG/{chain}/edges/global_edges.csv')
     edge_index = torch.LongTensor(list(hierarchical_graph.edges)).t().contiguous()
     global_data = Data(x=x, edge_index=edge_index, y=dataset_generator.target)
     

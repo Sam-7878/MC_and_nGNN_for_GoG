@@ -16,10 +16,10 @@ warnings.filterwarnings("ignore")
 chain = 'polygon'
 
 # read in labels file
-chain_labels = pd.read_csv(f'../data/labels.csv').query('Chain == @chain')
+chain_labels = pd.read_csv(f'../../_data/data/labels.csv').query('Chain == @chain')
 chain_class = dict(zip(chain_labels.Contract, chain_labels.Category))
 
-global_link = pd.read_csv(f'../graphs/{chain}/{chain}_common_nodes_except_null_labels.csv') 
+global_link = pd.read_csv(f'../../_data/graphs/{chain}/{chain}_common_nodes_except_null_labels.csv') 
 
 global_link['Class1'] = global_link['Contract1'].map(chain_class)
 global_link['Class2'] = global_link['Contract2'].map(chain_class)
@@ -53,7 +53,7 @@ node_set = set(nodes)
 number_of_transactions = {}
 for addr in tqdm(chain_class):
     try:
-        tx = pd.read_csv(f'../data/transactions/{chain}/{addr}.csv')
+        tx = pd.read_csv(f'../../_data/data/transactions/{chain}/{addr}.csv')
         tx['timestamp'] = pd.to_datetime(tx['timestamp'], unit='s')
         end_date = pd.Timestamp('2024-03-01')
         tx = tx[tx['timestamp'] < end_date]

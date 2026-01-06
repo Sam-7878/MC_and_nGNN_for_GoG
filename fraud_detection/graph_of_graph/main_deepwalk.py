@@ -86,11 +86,11 @@ def load_labels(filepath, column_name='label'):
 def main():
     args = parameter_parser()
     chain = 'polygon'
-    filepath = f'../data/features/{chain}_basic_metrics_processed.csv'
+    filepath = f'../../_data/data/features/{chain}_basic_metrics_processed.csv'
     y = load_labels(filepath)
     
     graph_embeddings = []
-    embedding_path = f'../../data/Deepwalk/{chain}'
+    embedding_path = f'../../../_data/data/Deepwalk/{chain}'
 
     processed_graphs = 0
     
@@ -110,7 +110,7 @@ def main():
 
     x = torch.cat(graph_embeddings, dim=0)
 
-    hierarchical_graph = hierarchical_graph_reader(f'../../GoG/{chain}/edges/global_edges.csv')
+    hierarchical_graph = hierarchical_graph_reader(f'../../../_data/GoG/{chain}/edges/global_edges.csv')
     edge_index = torch.LongTensor(list(hierarchical_graph.edges)).t().contiguous()
 
     global_data = Data(x=x, edge_index=edge_index, y=y)

@@ -8,7 +8,7 @@ import os
 def main():
     chain = 'polygon'
 
-    labels = pd.read_csv('../data/labels.csv').query('Chain == @chain')
+    labels = pd.read_csv('../../_data/data/labels.csv').query('Chain == @chain')
 
     # Use three-class as an example.
     n = 3
@@ -23,7 +23,7 @@ def main():
     # create timestamps
     stats = []
     for addr in labels_select_df.Contract.values:
-        tx = pd.read_csv(f'../data/transactions/{chain}/{addr}.csv')
+        tx = pd.read_csv(f'../../_data/data/transactions/{chain}/{addr}.csv')
         first_timestamp = tx['timestamp'].min()
         stats.append({'address': addr, 'first_timestamp': first_timestamp})
         
@@ -42,12 +42,12 @@ def main():
     train_index = list(timestamps['addr_index'].values)[:train_num]
     test_index = list(timestamps['addr_index'].values)[train_num:]
 
-    file_name = f'../GoG/node/{chain}_train_index_{n}.txt'
+    file_name = f'../../_data/GoG/node/{chain}_train_index_{n}.txt'
     with open(file_name, 'w') as file:
         for item in train_index:
             file.write(f"{item}\n")
 
-    file_name = f'../GoG/node/{chain}_test_index_{n}.txt'
+    file_name = f'../../_data/GoG/node/{chain}_test_index_{n}.txt'
     with open(file_name, 'w') as file:
         for item in test_index:
             file.write(f"{item}\n")
