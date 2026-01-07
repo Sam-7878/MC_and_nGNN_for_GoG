@@ -4,6 +4,7 @@ from torch_scatter import scatter_add
 from torch_geometric.data import InMemoryDataset, Data
 import os
 
+
 class TransactionEdgeDataset(InMemoryDataset):
     def __init__(self, root, transform=None, pre_transform=None, chain='polygon', use_train=True):
         self.chain = chain
@@ -40,7 +41,7 @@ class TransactionEdgeDataset(InMemoryDataset):
 
     def load_data(self):
         data_path = self.processed_paths[0] if self.use_train else self.processed_paths[1]
-        self.data = torch.load(data_path) if os.path.exists(data_path) else None
+        self.data = torch.load(data_path, weights_only=False) if os.path.exists(data_path) else None
 
     def prepare_node_features(self, df):
         num_nodes = df[['node1', 'node2']].max().max() + 1

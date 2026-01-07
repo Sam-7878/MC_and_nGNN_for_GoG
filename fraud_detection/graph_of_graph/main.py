@@ -9,7 +9,10 @@ from utils import hierarchical_graph_reader, GraphDatasetGenerator
 
 class Args:
     def __init__(self):
-        self.device = 'cuda:1'  
+        # PyGOD는 gpu 인자를 int로 받습니다: 0,1,2... / CPU는 -1
+        self.device = 0 if torch.cuda.is_available() else -1
+        print(f"Using device: {'GPU' if self.device >= 0 else 'CPU'}")
+
 
 def create_masks(num_nodes):
     indices = np.arange(num_nodes)
@@ -34,14 +37,24 @@ def eval_roc_auc(label, score):
         roc_auc = roc_auc_score(y_true=label, y_score=score)
     return roc_auc
 
+
+
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
 def run_model(detector, data, seeds):
     auc_scores = []
     ap_scores = []
     
     for seed in seeds:
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        # random.seed(seed)
+        # np.random.seed(seed)
+        # torch.manual_seed(seed)
+        set_seed(seed)
 
         detector.fit(data)
 
@@ -55,52 +68,127 @@ def run_model(detector, data, seeds):
 
     return np.mean(auc_scores), np.std(auc_scores), np.mean(ap_scores), np.std(ap_scores)
 
+
+
+from torch_geometric.data import Data
+from pygod.detector import DOMINANT, DONE, GAE, AnomalyDAE, CoLA
+from torch_geometric.utils import coalesce
+
 def main():
     args = Args()
-    chain = 'bnb'
-    dataset_generator = GraphDatasetGenerator(f'../../_data/data/features/{chain}_basic_metrics_processed.csv')
+
+    chain = "polygon"
+    dataset_generator = GraphDatasetGenerator(
+        f"../../../_data/data/features/{chain}_basic_metrics_processed.csv"
+    )
     data_list = dataset_generator.get_pyg_data_list()
 
     x = torch.cat([data.x for data in data_list], dim=0)
-    hierarchical_graph = hierarchical_graph_reader(f'../../_data/GoG/{chain}/edges/global_edges.csv')
+
+    hierarchical_graph = hierarchical_graph_reader(
+        f"../../../_data/GoG/{chain}/edges/global_edges.csv"
+    )
+    # edge_index = torch.LongTensor(list(hierarchical_graph.edges)).t().contiguous()
+    # global_data = Data(x=x, edge_index=edge_index, y=dataset_generator.target)
+
     edge_index = torch.LongTensor(list(hierarchical_graph.edges)).t().contiguous()
-    global_data = Data(x=x, edge_index=edge_index, y=dataset_generator.target)
-    
+    num_nodes = x.size(0)
+
+    # ✅ 모든 노드에 self-loop 추가 (고립 노드 포함)
+    self_loops = torch.arange(num_nodes, dtype=torch.long)
+    self_edge_index = torch.stack([self_loops, self_loops], dim=0)
+    edge_index = torch.cat([edge_index, self_edge_index], dim=1)
+
+    # (선택) 중복/정렬 정리
+    edge_index = coalesce(edge_index, num_nodes=num_nodes)
+
+    global_data = Data(
+        x=x,
+        edge_index=edge_index,
+        y=dataset_generator.target,
+        num_nodes=num_nodes,  # ✅ 명시적으로도 고정
+    )
+
+    print("num_nodes:", global_data.num_nodes)
+    print("edge_index min/max:", int(global_data.edge_index.min()), int(global_data.edge_index.max()))
+
     train_mask, val_mask, test_mask = create_masks(global_data.num_nodes)
     global_data.train_mask = train_mask
     global_data.val_mask = val_mask
     global_data.test_mask = test_mask
 
     model_params = {
-        'DOMINANT': [{'hid_dim': d, 'lr': lr, 'epoch': e} for d in [16, 32, 64] for lr in [0.01, 0.005, 0.1] for e in [50, 100, 150]],
-        'DONE': [{'hid_dim': d, 'lr': lr, 'epoch': e} for d in [16, 32, 64] for lr in [0.01, 0.005, 0.1] for e in [50, 100, 150]],
-        'GAE': [{'hid_dim': d, 'lr': lr, 'epoch': e} for d in [16, 32, 64] for lr in [0.01, 0.005, 0.1] for e in [50, 100, 150]],
-        'AnomalyDAE': [{'hid_dim': d, 'lr': lr, 'epoch': e} for d in [16, 32, 64] for lr in [0.01, 0.005, 0.1] for e in [50, 100, 150]],
-        'CoLA': [{'hid_dim': d, 'lr': lr, 'epoch': e} for d in [16, 32, 64] for lr in [0.01, 0.005, 0.1] for e in [50, 100, 150]]
+        "DOMINANT": [{"hid_dim": d, "lr": lr, "epoch": e}
+                     for d in [16, 32, 64] for lr in [0.01, 0.005, 0.1] for e in [50, 100, 150]],
+        "DONE": [{"hid_dim": d, "lr": lr, "epoch": e}
+                 for d in [16, 32, 64] for lr in [0.01, 0.005, 0.1] for e in [50, 100, 150]],
+        "GAE": [{"hid_dim": d, "lr": lr, "epoch": e}
+                for d in [16, 32, 64] for lr in [0.01, 0.005, 0.1] for e in [50, 100, 150]],
+        "AnomalyDAE": [{"hid_dim": d, "lr": lr, "epoch": e}
+                       for d in [16, 32, 64] for lr in [0.01, 0.005, 0.1] for e in [50, 100, 150]],
+        "CoLA": [{"hid_dim": d, "lr": lr, "epoch": e}
+                 for d in [16, 32, 64] for lr in [0.01, 0.005, 0.1] for e in [50, 100, 150]],
     }
+
+    # ✅ eval 제거: 이름 -> 클래스 매핑
+    MODEL_MAP = {
+        "DOMINANT": DOMINANT,
+        "DONE": DONE,
+        "GAE": GAE,
+        "AnomalyDAE": AnomalyDAE,
+        "CoLA": CoLA,
+    }
+
+    def build_detector(model_name: str, param: dict):
+        ModelCls = MODEL_MAP[model_name]
+        return ModelCls(
+            hid_dim=param["hid_dim"],
+            num_layers=2,
+            epoch=param["epoch"],
+            lr=param["lr"],
+            gpu=args.device,   # ✅ int (0 또는 -1)
+        )
 
     seed_for_param_selection = 42
     best_model_params = {}
+
     for model_name, param_list in model_params.items():
         for param in param_list:
-            detector = eval(f"{model_name}(hid_dim=param['hid_dim'], num_layers=2, epoch=param['epoch'], lr=param['lr'], gpu=args.device)")
-            avg_auc, std_auc, avg_ap, std_ap = run_model(detector, global_data, [seed_for_param_selection])
-            if model_name not in best_model_params or avg_auc > best_model_params[model_name].get('Best AUC', 0):
+            detector = build_detector(model_name, param)
+            avg_auc, std_auc, avg_ap, std_ap = run_model(
+                detector, global_data, [seed_for_param_selection]
+            )
+
+            if (model_name not in best_model_params) or (
+                avg_auc > best_model_params[model_name].get("Best AUC", 0)
+            ):
                 best_model_params[model_name] = {
                     "Best AUC": avg_auc,
                     "AUC Std Dev": std_auc,
                     "Best AP": avg_ap,
                     "AP Std Dev": std_ap,
-                    "Params": param
+                    "Params": param,
                 }
-            print(f'Tested {model_name} with {param}: Avg AUC={avg_auc:.4f}, Std AUC={std_auc:.4f}, Avg AP={avg_ap:.4f}, Std AP={std_ap:.4f}')
+
+            print(
+                f"Tested {model_name} with {param}: "
+                f"Avg AUC={avg_auc:.4f}, Std AUC={std_auc:.4f}, "
+                f"Avg AP={avg_ap:.4f}, Std AP={std_ap:.4f}"
+            )
 
     seeds_for_evaluation = [42, 43, 44]
     for model_name, stats in best_model_params.items():
-        param = stats['Params']
-        detector = eval(f"{model_name}(hid_dim=param['hid_dim'], num_layers=2, epoch=param['epoch'], lr=param['lr'], gpu=args.device)")
-        avg_auc, std_auc, avg_ap, std_ap = run_model(detector, global_data, seeds_for_evaluation)
-        print(f'Final Evaluation for {model_name}: Avg AUC={avg_auc:.4f}, Std AUC={std_auc:.4f}, Avg AP={avg_ap:.4f}, Std AP={std_ap:.4f}')
+        param = stats["Params"]
+        detector = build_detector(model_name, param)
+        avg_auc, std_auc, avg_ap, std_ap = run_model(
+            detector, global_data, seeds_for_evaluation
+        )
+        print(
+            f"Final Evaluation for {model_name}: "
+            f"Avg AUC={avg_auc:.4f}, Std AUC={std_auc:.4f}, "
+            f"Avg AP={avg_ap:.4f}, Std AP={std_ap:.4f}"
+        )
+
 
 if __name__ == "__main__":
     main()
