@@ -27,6 +27,12 @@ def get_args():
     parser.add_argument('--features', default=[0, 1, 2], nargs='+', help='List of features to include')
     return parser.parse_args()
 
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
 def main():
     args = get_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -36,10 +42,9 @@ def main():
     metrics = {'train': [], 'test': []}
 
     for seed in seeds:
-        torch.manual_seed(seed)
-        np.random.seed(seed)
+        set_seed(seed)
 
-        dataset = TransactionDataset(root=f'../../_data/data/GCN/{args.chain}')
+        dataset = TransactionDataset(root=f'../../../_data/data/GCN/{args.chain}')
         labels = [dataset.get_label(idx) for idx in range(len(dataset))] 
         dataset = select_features_index(dataset, index=args.features)
         num_classes = len(set(labels))
@@ -52,8 +57,8 @@ def main():
                 stratify=labels
             )
         elif args.split_type == 'temporal':
-            train_indices_file = f"../../_data/GoG/node/{args.chain}_train_index_{num_classes}.txt"
-            test_indices_file = f"../../_data/GoG/node/{args.chain}_test_index_{num_classes}.txt"
+            train_indices_file = f"../../../_data/GoG/node/{args.chain}_train_index_{num_classes}.txt"
+            test_indices_file = f"../../../_data/GoG/node/{args.chain}_test_index_{num_classes}.txt"
             with open(train_indices_file, 'r') as f:
                 train_indices = [int(line.strip()) for line in f]
             with open(test_indices_file, 'r') as f:

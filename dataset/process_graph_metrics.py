@@ -2,9 +2,19 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
-def main():
+import argparse
 
-    chain = 'polygon'
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chain', type=str, default='polygon')
+    return parser.parse_args()
+
+
+
+def main():
+    args = get_args()
+    chain = str(args.chain)
+    
     graphs1 = pd.read_csv(f'../../_data/results/{chain}_basic_metrics.csv')
     graphs2 = pd.read_csv(f'../../_data/results/{chain}_advanced_metrics_labels.csv')
     

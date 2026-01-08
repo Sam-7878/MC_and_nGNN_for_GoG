@@ -76,6 +76,12 @@ def _ensure_1d_int(y):
     y = np.asarray(y)
     return y.ravel().astype(int, copy=False)
 
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
 def evaluate_model_with_seeds(model, best_params, x, y, seeds):
     x = _ensure_2d_float32(x)
     y = _ensure_1d_int(y)
@@ -84,6 +90,7 @@ def evaluate_model_with_seeds(model, best_params, x, y, seeds):
     ap_results = []
 
     for seed in seeds:
+        set_seed(seed)
         x_train_val, x_test, y_train_val, y_test = train_test_split(
             x, y, test_size=0.1, random_state=seed, stratify=y
         )
@@ -111,9 +118,18 @@ def evaluate_model_with_seeds(model, best_params, x, y, seeds):
 
     return np.mean(auc_results), np.std(auc_results), np.mean(ap_results), np.std(ap_results)
 
+import argparse
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chain', type=str, default='polygon')
+    return parser.parse_args()
+
 
 def main():
-    chain = 'polygon'
+    args = get_args()
+    chain = str(args.chain)
+
     dataset_generator = GraphDatasetGenerator(f'../../../_data/data/features/{chain}_basic_metrics_processed.csv')
     data_list = dataset_generator.get_pyg_data_list()
 

@@ -85,11 +85,21 @@ class TransactionDataset(InMemoryDataset):
                     num_nodes=num_nodes, graph_attr=graph_attr)
         return data
 
+import argparse
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chain', type=str, default='polygon')
+    return parser.parse_args()
+
+
+
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-    chain = 'polygon'
+    args = get_args()
+    chain = str(args.chain)
     labels = pd.read_csv('../../_data/data/labels.csv').query('Chain == @chain')
 
     # Use three-class as an example.

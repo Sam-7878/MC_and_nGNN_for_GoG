@@ -33,10 +33,18 @@ def tune_and_find_best_params(model, params, x_train, y_train, x_val, y_val):
             best_params = param_set
     return best_params
 
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
 def evaluate_model_with_seeds(model, best_params, x, y, seeds):
     auc_results = []
     ap_results = []
+
     for seed in seeds:
+        set_seed(seed)
         x_train_val, x_test, y_train_val, y_test = train_test_split(x, y, test_size=0.1, random_state=seed)
         x_train, x_val, y_train, y_val = train_test_split(x_train_val, y_train_val, test_size=1/9, random_state=seed)        
         model.set_params(**best_params)
@@ -59,8 +67,18 @@ def load_labels(filepath, column_name='label'):
         print(f"Error: Column {column_name} does not exist in the file.")
         exit()
 
+import argparse
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chain', type=str, default='polygon')
+    return parser.parse_args()
+
+
 def main():
-    chain = 'polygon'
+    args = get_args()
+    chain = str(args.chain)
+    
     filepath = f'../../_data/data/features/{chain}_basic_metrics_processed.csv'
     y = load_labels(filepath)
     

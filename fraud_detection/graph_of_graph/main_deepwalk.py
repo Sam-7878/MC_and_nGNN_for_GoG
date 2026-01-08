@@ -51,14 +51,18 @@ def train_and_evaluate(detector, data, epochs=50, eval_interval=5):
                 ap_score = average_precision_score(data.y.cpu().numpy(), score.cpu().numpy())
                 print(f'Epoch {epoch:03d}, Loss: {loss.item():.4f}, AUC: {auc_score:.4f}, AP: {ap_score:.4f}')
 
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
 def run_model(detector, data, seeds):
     auc_scores = []
     ap_scores = []
     
     for seed in seeds:
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        set_seed(seed)
 
         detector.fit(data)
 
@@ -83,9 +87,19 @@ def load_labels(filepath, column_name='label'):
         print(f"Error: Column {column_name} does not exist in the file.")
         exit()
 
+import argparse
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chain', type=str, default='polygon')
+    return parser.parse_args()
+
+
+
 def main():
     args = parameter_parser()
-    chain = 'polygon'
+    chain = args.chain
+    
     filepath = f'../../_data/data/features/{chain}_basic_metrics_processed.csv'
     y = load_labels(filepath)
     

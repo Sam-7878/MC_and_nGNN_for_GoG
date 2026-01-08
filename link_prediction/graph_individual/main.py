@@ -106,14 +106,19 @@ from dataset import TransactionEdgeDataset
 import warnings
 warnings.filterwarnings('ignore')
 
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
 def train_test(model_class, args):
     all_train_metrics = []
     all_test_metrics = []
 
     seeds = [42, 43, 44]
     for seed in seeds:
-        torch.manual_seed(seed)
-        np.random.seed(seed)
+        set_seed(seed)
         root_path = f'../../_data/GoG/edges/{args.chain}' 
 
         train_data = TransactionEdgeDataset(root=root_path, chain=args.chain, use_train=True)

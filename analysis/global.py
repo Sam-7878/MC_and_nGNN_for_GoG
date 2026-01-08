@@ -12,8 +12,15 @@ from tqdm import tqdm
 import warnings
 warnings.filterwarnings("ignore")
 
+import argparse
 
-chain = 'polygon'
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chain', type=str, default='polygon')
+    return parser.parse_args()
+
+args = get_args()
+chain = str(args.chain)
 
 # read in labels file
 chain_labels = pd.read_csv(f'../../_data/data/labels.csv').query('Chain == @chain')

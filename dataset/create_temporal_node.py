@@ -4,9 +4,17 @@ import random
 import torch
 import os
     
+import argparse
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chain', type=str, default='polygon')
+    return parser.parse_args()
+
 
 def main():
-    chain = 'polygon'
+    args = get_args()
+    chain = str(args.chain)
 
     labels = pd.read_csv('../../_data/data/labels.csv').query('Chain == @chain')
 

@@ -21,8 +21,16 @@ def calculate_stats(tx, end_date):
     
     return num_nodes, num_edges, density, assortativity, reciprocity
 
+import argparse
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chain', type=str, default='polygon')
+    return parser.parse_args()
+
 def main():
-    chain = 'polygon'
+    args = get_args()
+    chain = str(args.chain)
 
     chain_labels = pd.read_csv(f'../../_data/data/labels.csv').query('Chain == @chain')
     chain_class = list(chain_labels.Contract.values)

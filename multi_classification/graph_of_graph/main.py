@@ -9,6 +9,11 @@ from train import SEALCITrainer
 from param_parser import parameter_parser
 import random
 
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 def main():
     args = parameter_parser()
@@ -22,9 +27,7 @@ def main():
 
     for seed in [42, 43, 44]:  # different seeds
         print(seed)
-        torch.manual_seed(seed)
-        random.seed(seed)
-        np.random.seed(seed)
+        set_seed(seed)
 
         trainer = SEALCITrainer(args, seed)
         trainer.fit()

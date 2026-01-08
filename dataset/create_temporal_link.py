@@ -59,8 +59,17 @@ def generate_train_test_data(edges_with_timestamps_sorted, chain):
         for edge in test_negative_edges:
             f.write(f"{edge[0]} {edge[1]} 0\n")
 
+import argparse
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chain', type=str, default='polygon')
+    return parser.parse_args()
+
+
 def main():
-    chain = 'polygon'
+    args = get_args()
+    chain = str(args.chain)
 
     os.makedirs(os.path.dirname(f'../../_data/GoG/edges/{chain}/'), exist_ok=True)
 
