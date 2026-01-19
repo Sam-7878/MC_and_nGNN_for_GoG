@@ -79,11 +79,11 @@ def main():
     args = get_args()
     chain = str(args.chain)
     
-    filepath = f'../../_data/data/features/{chain}_basic_metrics_processed.csv'
+    filepath = f'../../_data/dataset/features/{chain}_basic_metrics_processed.csv'
     y = load_labels(filepath)
     
     graph_embeddings = []
-    embedding_path = f'../../_data/data/Deepwalk/{chain}'
+    embedding_path = f'../../_data/dataset/Deepwalk/{chain}'
     
     processed_graphs = 0
     

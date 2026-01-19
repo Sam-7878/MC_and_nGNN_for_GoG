@@ -79,7 +79,7 @@ def main():
 
     chain = "polygon"
     dataset_generator = GraphDatasetGenerator(
-        f"../../../_data/data/features/{chain}_basic_metrics_processed.csv"
+        f"../../../_data/dataset/features/{chain}_basic_metrics_processed.csv"
     )
     data_list = dataset_generator.get_pyg_data_list()
 

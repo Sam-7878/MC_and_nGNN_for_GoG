@@ -44,7 +44,7 @@ def main():
     for seed in seeds:
         set_seed(seed)
 
-        dataset = TransactionDataset(root=f'../../../_data/data/GCN/{args.chain}')
+        dataset = TransactionDataset(root=f'../../../_data/dataset/GCN/{args.chain}')
         labels = [dataset.get_label(idx) for idx in range(len(dataset))] 
         dataset = select_features_index(dataset, index=args.features)
         num_classes = len(set(labels))

@@ -14,16 +14,26 @@ warnings.filterwarnings("ignore")
 
 import argparse
 
-def get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--chain', type=str, default='polygon')
-    return parser.parse_args()
+parser = argparse.ArgumentParser(
+    description='Analyze global_graph properties for a specified blockchain.',
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+    epilog="""
+    Examples:
+    python global.py --chain bsc
+    python global.py --chain ethereum
+    """
+)
+parser.add_argument(
+    '--chain',
+    type=str,
+    required=True,
+    help='Blockchain name (e.g., bsc, ethereum, polygon)'
+)
 
-args = get_args()
-chain = str(args.chain)
-
+args = parser.parse_args()
+chain = args.chain
 # read in labels file
-chain_labels = pd.read_csv(f'../../_data/data/labels.csv').query('Chain == @chain')
+chain_labels = pd.read_csv(f'../../_data/dataset/labels.csv').query('Chain == @chain')
 chain_class = dict(zip(chain_labels.Contract, chain_labels.Category))
 
 global_link = pd.read_csv(f'../../_data/graphs/{chain}/{chain}_common_nodes_except_null_labels.csv') 
@@ -60,7 +70,7 @@ node_set = set(nodes)
 number_of_transactions = {}
 for addr in tqdm(chain_class):
     try:
-        tx = pd.read_csv(f'../../_data/data/transactions/{chain}/{addr}.csv')
+        tx = pd.read_csv(f'../../_data/dataset/transactions/{chain}/{addr}.csv')
         tx['timestamp'] = pd.to_datetime(tx['timestamp'], unit='s')
         end_date = pd.Timestamp('2024-03-01')
         tx = tx[tx['timestamp'] < end_date]

@@ -73,13 +73,13 @@ def main():
 
     os.makedirs(os.path.dirname(f'../../_data/GoG/edges/{chain}/'), exist_ok=True)
 
-    chain_labels = pd.read_csv(f'../../_data/data/labels.csv').query('Chain == @chain')
+    chain_labels = pd.read_csv(f'../../_data/dataset/labels.csv').query('Chain == @chain')
     chain_class = list(chain_labels.Contract.values)
 
     # create timestamps
     stats = []
     for addr in chain_class:
-        tx = pd.read_csv(f'../../_data/data/transactions/{chain}/{addr}.csv')
+        tx = pd.read_csv(f'../../_data/dataset/transactions/{chain}/{addr}.csv')
         first_timestamp = tx['timestamp'].min()
         stats.append({'address': addr, 'first_timestamp': first_timestamp})
         

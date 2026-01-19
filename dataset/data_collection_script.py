@@ -73,7 +73,7 @@ def save_to_csv(transactions, filename):
 def main():
     # read in the address 
     chain = 'ethereum'
-    address = list(pd.read_csv('../../_data/data/labels.csv').query('Chain == @chain').Contract.values)
+    address = list(pd.read_csv('../../_data/dataset/labels.csv').query('Chain == @chain').Contract.values)
     
     api_key = "Your EtherScan/PolygonScan/BscScan API"
 

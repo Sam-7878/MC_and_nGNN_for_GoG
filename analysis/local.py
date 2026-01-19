@@ -1,179 +1,462 @@
+"""
+Local Graph Analysis - Cross-Chain Comparison
+Updated: 2026-01-15 (Category mapping added)
+"""
+
 import pandas as pd
-import json
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-import networkx as nx
-import matplotlib.pyplot as plt
-import numpy as np
-import random
-from collections import Counter
-
 import warnings
+import os
+from pathlib import Path
+
 warnings.filterwarnings("ignore")
 
+# ==================== Configuration ====================
 
-def _normalize_columns(df: pd.DataFrame, chain_name: str) -> pd.DataFrame:
-    cols = {c.lower(): c for c in df.columns}
-    # class 후보를 폭넓게 탐색
-    cand_keys = ['class', 'class_x', 'class_y',
-                 'label', 'label_x', 'label_y',
-                 'category', 'classes']
-    src_key = next((k for k in cand_keys if k in cols), None)
-    if src_key:
-        src_col = cols[src_key]
-        if src_col != 'Class':
-            df = df.rename(columns={src_col: 'Class'})
-    if 'Class' not in df.columns:
-        df['Class'] = 'Unknown'
+BASE_PATH = Path('../../_data/results/analysis/')
+LABELS_PATH = Path('../../_data/dataset/labels.csv')
 
-    # Chain 처리도 필요하면 여기 유지
-    chain_keys = ['chain', 'network', 'net']
-    chain_key = next((k for k in chain_keys if k in cols), None)
-    if chain_key:
-        df = df.rename(columns={cols[chain_key]: 'Chain'})
-    if 'Chain' not in df.columns:
-        df['Chain'] = chain_name
+# ✅ Category 매핑 (프로젝트에 맞게 수정 필요!)
+CATEGORY_MAPPING = {
+    0: 'Normal',
+    1: 'Scam',
+    2: 'Pump_Dump',
+    3: 'Ponzi',
+    4: 'Phishing',
+    5: 'Honeypot',
+    6: 'Rug_Pull',
+    7: 'Token_Abuse',
+    8: 'Price_Manipulation',
+    9: 'Wash_Trading',
+    10: 'Front_Running',
+    11: 'Sandwich_Attack',
+    12: 'Flash_Loan_Attack',
+    13: 'Oracle_Manipulation',
+    14: 'Governance_Attack',
+    15: 'MEV_Exploit',
+    16: 'Liquidity_Theft',
+    17: 'Exit_Scam',
+    18: 'Fake_Token',
+    19: 'Airdrop_Scam',
+    20: 'Social_Engineering',
+    # 필요한 만큼 추가
+}
+
+# 파일명 패턴
+FILE_PATTERNS = {
+    'nx': '{chain}_basic_metrics_maxd2000.csv',
+    'snap': '{chain}_snap_metrics_labels.csv',
+    'common': '{chain}_common_nodes.csv'
+}
+
+# 체인 이름 매핑
+CHAIN_MAPPING = {
+    'bsc': 'BSC',
+    'eth': 'Ethereum',
+    'ethereum': 'Ethereum',
+    'polygon': 'Polygon',
+    'matic': 'Polygon'
+}
+
+# ==================== Utility Functions ====================
+
+def _normalize_contract_address(df: pd.DataFrame) -> pd.DataFrame:
+    """Contract 주소 정규화"""
+    if 'Contract' in df.columns:
+        df['Contract'] = df['Contract'].astype(str).str.lower().str.strip()
     return df
 
 
-# read in files include local graph properties
-# 1) 원본 CSV 읽기
-poly_basic   = pd.read_csv('../../_data/results/polygon_basic_metrics.csv')
-poly_labels  = pd.read_csv('../../_data/results/polygon_advanced_metrics_labels.csv')
-eth_basic    = pd.read_csv('../../_data/results/ethereum_basic_metrics.csv')
-eth_labels   = pd.read_csv('../../_data/results/ethereum_advanced_metrics_labels.csv')
-bsc_basic    = pd.read_csv('../../_data/results/bsc_basic_metrics.csv')
-bsc_labels   = pd.read_csv('../../_data/results/bsc_advanced_metrics_labels.csv')
-
-# 2) 라벨 쪽에 먼저 표준화 적용 (Class, Chain 이름 맞추기)
-poly_labels = _normalize_columns(poly_labels, 'Polygon')
-eth_labels  = _normalize_columns(eth_labels,  'Ethereum')
-bsc_labels  = _normalize_columns(bsc_labels,  'BSC')
-
-# 3) basic + labels merge
-polygon_graphs  = pd.merge(poly_basic, poly_labels, on='Contract')
-ethereum_graphs = pd.merge(eth_basic,  eth_labels,  on='Contract')
-bsc_graphs      = pd.merge(bsc_basic,  bsc_labels,  on='Contract')
-
-# 4) 이제는 merge 후에 다시 _normalize_columns 호출할 필요 없음
-#    (아래 세 줄은 삭제 또는 주석 처리)
-# bsc_graphs      = _normalize_columns(bsc_graphs,      'bsc')
-# ethereum_graphs = _normalize_columns(ethereum_graphs, 'ethereum')
-# polygon_graphs  = _normalize_columns(polygon_graphs,  'polygon')
-
-# 5) concat
-graphs = pd.concat([bsc_graphs, ethereum_graphs, polygon_graphs], ignore_index=True)
-
-
-filtered_graph = graphs[['Contract', 'Chain', 'Class']]
-
-print("BSC cols:", bsc_graphs.columns.tolist())
-print("ETH cols:", ethereum_graphs.columns.tolist())
-print("POLY cols:", polygon_graphs.columns.tolist())
-
-print("graphs rows:", len(graphs))
-# print("labels rows:", len(labels))
-# print("merged rows:", len(merged))
-# print("Class value counts:\n", merged['Class'].value_counts(dropna=False).head())
-# print("Chains in merged:", merged['Chain'].dropna().str.lower().value_counts().to_dict())
-
-
-class_counts = filtered_graph['Class'].value_counts().reset_index()
-class_counts.columns = ['Class', 'Counts']
-class_counts['Category'] = class_counts.reset_index().index
-
-result_graph = filtered_graph.merge(class_counts[['Class', 'Category']], on='Class')
-result_graph[['Chain', 'Contract', 'Category']].to_csv('labels.csv', index = 0)
-top_classes = graphs['Class'].value_counts().head(5).index.tolist()
-graphs_filter = graphs.query('Class in @top_classes')
-
-
-metrics = ['Num_edges', 'Assortativity', 'Reciprocity',
-           'Effective_Diameter', 'Clustering_Coefficient']
-
-fig, axes = plt.subplots(nrows=1, ncols=5, figsize=(25, 5))  
-
-axes = axes.flatten()
-
-class_order = graphs_filter['Class'].value_counts().index
-
-for i, metric in enumerate(metrics):
-    sns.boxplot(x='Class', y=metric, data=graphs_filter, order=class_order, ax=axes[i])
-    axes[i].set_title(f'{metric}', fontsize=20)  
-    if metric in ['Num_edges', 'Effective_Diameter']: 
-        axes[i].set_yscale('log')
-handles, labels = axes[0].get_legend_handles_labels()
-legend = fig.legend(handles, labels, loc='upper left', bbox_to_anchor=(0.9, 0.93), title='Blockchain',
-                    fontsize=12, title_fontsize=13)
-
-plt.tight_layout()
-plt.show()
-
-
-palette = sns.color_palette('Set2') 
-chain_colors = {
-    'Polygon': palette[0],
-    'Ethereum': palette[1],
-    'BNB': palette[2]
-}
-
-
-def plot_grouped_boxplot(data_polygon, data_ethereum, data_bnb, ax, 
-                         metrics, labels, log = True):
-    data_polygon['Chain'] = 'Polygon'
-    data_ethereum['Chain'] = 'Ethereum'
-    data_bnb['Chain'] = 'BNB'
+def load_labels(labels_path: Path) -> pd.DataFrame:
+    """
+    Labels 파일 로드 및 Category 매핑
     
-    combined_data = pd.concat([data_polygon[metrics + ['Chain']],
-                               data_ethereum[metrics + ['Chain']],
-                               data_bnb[metrics + ['Chain']]])
+    Returns:
+        pd.DataFrame: Contract, Chain, Label (텍스트) 정보
+    """
+    if not labels_path.exists():
+        print(f"⚠️  Warning: Labels file not found at {labels_path}")
+        return pd.DataFrame()
     
-    melted_data = combined_data.melt(id_vars='Chain', var_name='Metric', value_name='Value')
-    
-    sns.boxplot(data=melted_data, x='Metric', y='Value', hue='Chain', ax=ax, palette='Set2')
-    
-    if log:
-        ax.set_yscale('log')
+    try:
+        labels_df = pd.read_csv(labels_path)
         
-    ax.set_xlabel('')  
-    ax.set_ylabel('') 
-    ax.tick_params(axis='both', labelsize=20)  
-    ax.set_xticklabels(labels, rotation=0) 
-    ax.get_legend().remove()
+        # Contract 주소 정규화
+        labels_df = _normalize_contract_address(labels_df)
+        
+        # ✅ Category → Label 매핑
+        if 'Category' in labels_df.columns:
+            # Category를 정수로 변환
+            labels_df['Category'] = pd.to_numeric(labels_df['Category'], errors='coerce')
+            
+            # 매핑 적용
+            labels_df['Label'] = labels_df['Category'].map(CATEGORY_MAPPING)
+            
+            # 매핑되지 않은 경우 Unknown_X 형식
+            unmapped = labels_df['Label'].isna()
+            if unmapped.any():
+                labels_df.loc[unmapped, 'Label'] = labels_df.loc[unmapped, 'Category'].apply(
+                    lambda x: f'Unknown_{int(x)}' if pd.notna(x) else 'Unknown'
+                )
+            
+            print(f"✓ Labels loaded: {len(labels_df)} contracts")
+            
+            # 매핑 통계
+            mapped_count = (~labels_df['Label'].str.startswith('Unknown', na=False)).sum()
+            unmapped_count = (labels_df['Label'].str.startswith('Unknown', na=False)).sum()
+            
+            if unmapped_count > 0:
+                print(f"⚠️  Warning: {unmapped_count} categories not mapped")
+                print(f"   Unmapped categories: {sorted(labels_df[labels_df['Label'].str.startswith('Unknown', na=False)]['Category'].unique())}")
+        
+        # Chain 컬럼 정규화
+        if 'Chain' in labels_df.columns:
+            labels_df['Chain'] = labels_df['Chain'].str.lower()
+        
+        return labels_df[['Contract', 'Chain', 'Label', 'Category']]
+        
+    except Exception as e:
+        print(f"❌ Error loading labels: {e}")
+        import traceback
+        traceback.print_exc()
+        return pd.DataFrame()
 
-fig, axes = plt.subplots(1, 4, figsize=(20, 5))
 
-# Subfigure 1: Number of Nodes and Number of Edges
-plot_grouped_boxplot(polygon_graphs, ethereum_graphs, bsc_graphs, axes[0],
-                     ['Num_nodes', 'Num_edges'], #'Number of Nodes and Edges', 
-                     ['Num nodes', 'Num edges'], True)
-axes[0].text(0.5, -0.13, '(a)', ha='center', va='top', transform=axes[0].transAxes, fontsize=20)
+def find_file(base_path: Path, chain: str, file_type: str) -> Path:
+    """파일 자동 탐지"""
+    pattern = FILE_PATTERNS[file_type].format(chain=chain)
+    file_path = base_path / pattern
+    
+    if file_path.exists():
+        return file_path
+    
+    # Fallback
+    possible_patterns = {
+        'nx': [
+            f'{chain}_basic_metrics_maxd2000.csv',
+            f'{chain}_basic_metrics.csv',
+        ],
+        'snap': [
+            f'{chain}_snap_metrics_labels.csv',
+            f'{chain}_advanced_metrics_labels.csv',
+        ]
+    }
+    
+    if file_type in possible_patterns:
+        for alt_pattern in possible_patterns[file_type]:
+            alt_path = base_path / alt_pattern
+            if alt_path.exists():
+                return alt_path
+    
+    return None
 
-# Subfigure 2: Density, Reciprocity, Clustering Coefficient
-plot_grouped_boxplot(polygon_graphs, ethereum_graphs, bsc_graphs, axes[1],
-                     ['Reciprocity', 'Clustering_Coefficient'],
-                     #'Reciprocity and Clustering Coefficient',
-                     ['Reciprocity', 'Clustering'], False)
-axes[1].text(0.5, -0.13, '(b)', ha='center', va='top', transform=axes[1].transAxes, fontsize=20)
 
-# Subfigure 3: Assortativity
-plot_grouped_boxplot(polygon_graphs, ethereum_graphs, bsc_graphs, axes[2],
-                     ['Assortativity'],
-                     #'Assortativity',
-                     ['Assortativity'], False)
-axes[2].text(0.5, -0.13, '(c)', ha='center', va='top', transform=axes[2].transAxes, fontsize=20)
+def load_and_merge(chain_name: str, labels_df: pd.DataFrame, base_path: Path = BASE_PATH) -> pd.DataFrame:
+    """NetworkX + SNAP + Labels 3-way merge"""
+    chain_lower = chain_name.lower()
+    chain_display = CHAIN_MAPPING.get(chain_lower, chain_name.capitalize())
+    
+    print(f"\n{'='*50}")
+    print(f"Loading {chain_display}...")
+    print(f"{'='*50}")
+    
+    # 파일 찾기
+    nx_file = find_file(base_path, chain_lower, 'nx')
+    snap_file = find_file(base_path, chain_lower, 'snap')
+    
+    if nx_file is None or snap_file is None:
+        print(f"❌ Files not found for {chain_display}")
+        return pd.DataFrame()
+    
+    print(f"✓ NetworkX: {nx_file.name}")
+    print(f"✓ SNAP: {snap_file.name}")
+    
+    try:
+        # 데이터 로드
+        nx_df = pd.read_csv(nx_file)
+        snap_df = pd.read_csv(snap_file)
+        
+        print(f"  - NetworkX rows: {len(nx_df)}")
+        print(f"  - SNAP rows: {len(snap_df)}")
+        
+        # Contract 주소 정규화
+        nx_df = _normalize_contract_address(nx_df)
+        snap_df = _normalize_contract_address(snap_df)
+        
+        # NetworkX + SNAP 병합
+        merged = pd.merge(nx_df, snap_df, on='Contract', how='inner', suffixes=('_nx', '_snap'))
+        print(f"✓ NetworkX + SNAP merged: {len(merged)} rows")
+        
+        # Labels 병합
+        if not labels_df.empty and 'Chain' in labels_df.columns:
+            chain_labels = labels_df[labels_df['Chain'] == chain_lower].copy()
+            
+            if not chain_labels.empty:
+                print(f"  - Labels for {chain_display}: {len(chain_labels)}")
+                
+                merged = pd.merge(
+                    merged,
+                    chain_labels[['Contract', 'Label', 'Category']],
+                    on='Contract',
+                    how='left'
+                )
+                
+                # Label 없으면 Unknown
+                if 'Label' in merged.columns:
+                    merged['Label'] = merged['Label'].fillna('Unknown')
+                    labeled_count = (merged['Label'] != 'Unknown').sum()
+                    print(f"✓ Labeled contracts: {labeled_count}/{len(merged)} ({labeled_count/len(merged)*100:.1f}%)")
+            else:
+                merged['Label'] = 'Unknown'
+        else:
+            merged['Label'] = 'Unknown'
+        
+        # 컬럼 정리
+        merged['Chain'] = chain_display
+        merged['Class'] = merged.get('Label', 'Unknown')
+        
+        # Diameter 통일
+        if 'Effective_Diameter_snap' in merged.columns:
+            merged['Effective_Diameter'] = merged['Effective_Diameter_snap']
+        elif 'Effective_Diameter_nx' in merged.columns:
+            merged['Effective_Diameter'] = merged['Effective_Diameter_nx']
+        
+        # Clustering 통일
+        if 'Clustering_Coefficient_snap' in merged.columns:
+            merged['Clustering_Coefficient'] = merged['Clustering_Coefficient_snap']
+        elif 'Clustering_Coefficient_nx' in merged.columns:
+            merged['Clustering_Coefficient'] = merged['Clustering_Coefficient_nx']
+        
+        return merged
+        
+    except Exception as e:
+        print(f"❌ Error loading {chain_display}: {e}")
+        import traceback
+        traceback.print_exc()
+        return pd.DataFrame()
 
-# Subfigure 4: Effective Diameter
-plot_grouped_boxplot(polygon_graphs, ethereum_graphs, bsc_graphs, axes[3],
-                     ['Effective_Diameter'], #'Effective Diameter', 
-                     ['Effective Diameter'], True)
-axes[3].text(0.5, -0.13, '(d)', ha='center', va='top', transform=axes[3].transAxes, fontsize=20)
 
-handles, labels = axes[0].get_legend_handles_labels()
-legend = fig.legend(handles, labels, loc='upper left', bbox_to_anchor=(0.89, 0.93), title='Blockchain',
-                    fontsize=14, title_fontsize=14)
+def print_statistics(df: pd.DataFrame, chain_name: str = "All"):
+    """데이터 통계 출력"""
+    print(f"\n{'='*50}")
+    print(f"Statistics - {chain_name}")
+    print(f"{'='*50}")
+    
+    if df.empty:
+        print("No data available.")
+        return
+    
+    print(f"Total Contracts: {len(df)}")
+    
+    if 'Class' in df.columns:
+        print(f"\nClass Distribution (Top 10):")
+        class_counts = df['Class'].value_counts().head(10)
+        for cls, count in class_counts.items():
+            print(f"  - {cls}: {count} ({count/len(df)*100:.1f}%)")
+        
+        # Unknown이 많으면 경고
+        unknown_count = (df['Class'] == 'Unknown').sum()
+        if unknown_count > len(df) * 0.1:
+            print(f"\n⚠️  Warning: {unknown_count} ({unknown_count/len(df)*100:.1f}%) contracts have 'Unknown' label")
+    
+    # 메트릭 통계
+    metrics = ['Num_nodes', 'Num_edges', 'Effective_Diameter', 'Clustering_Coefficient', 'Reciprocity']
+    available_metrics = [m for m in metrics if m in df.columns]
+    
+    if available_metrics:
+        print(f"\nMetric Statistics:")
+        stats = df[available_metrics].describe().loc[['mean', '50%', 'std']]
+        print(stats.to_string())
 
-plt.tight_layout()
-# plt.savefig("../figures/cross_chain_properties.eps", format='eps')
-plt.show()
 
+# ==================== Main Analysis ====================
+
+def main():
+    print("="*70)
+    print("Local Graph Analysis - Cross-Chain Comparison")
+    print("="*70)
+    print(f"Base path: {BASE_PATH}")
+    print(f"Labels path: {LABELS_PATH}")
+    
+    # Labels 로드 (Category → Label 매핑 포함)
+    labels_df = load_labels(LABELS_PATH)
+    
+    if labels_df.empty:
+        print("\n❌ Cannot load labels.csv")
+        return
+    
+    # Label 분포 미리 확인
+    if 'Label' in labels_df.columns and 'Chain' in labels_df.columns:
+        print("\n" + "="*50)
+        print("Label Distribution (from labels.csv)")
+        print("="*50)
+        
+        for chain in sorted(labels_df['Chain'].unique()):
+            chain_data = labels_df[labels_df['Chain'] == chain]
+            print(f"\n{chain.upper()}:")
+            
+            # 텍스트 라벨 분포
+            label_dist = chain_data['Label'].value_counts().head(10)
+            for label, count in label_dist.items():
+                # Category 번호도 표시
+                cat_num = chain_data[chain_data['Label'] == label]['Category'].iloc[0]
+                print(f"  {label} (Cat {int(cat_num)}): {count}")
+    
+    # 각 체인 데이터 로드
+    bsc_graphs = load_and_merge('bsc', labels_df, BASE_PATH)
+    ethereum_graphs = load_and_merge('ethereum', labels_df, BASE_PATH)
+    polygon_graphs = load_and_merge('polygon', labels_df, BASE_PATH)
+    
+    # 통계 출력
+    print_statistics(bsc_graphs, "BSC")
+    print_statistics(ethereum_graphs, "Ethereum")
+    print_statistics(polygon_graphs, "Polygon")
+    
+    # 전체 병합
+    all_dfs = [df for df in [bsc_graphs, ethereum_graphs, polygon_graphs] if not df.empty]
+    
+    if len(all_dfs) == 0:
+        print("\n❌ No data loaded.")
+        return
+    
+    graphs = pd.concat(all_dfs, ignore_index=True)
+    print_statistics(graphs, "All Chains")
+    
+    # 시각화
+    if 'Class' not in graphs.columns:
+        print("\n⚠️  No class labels for visualization.")
+        return
+    
+    # Unknown 제거
+    graphs_labeled = graphs[graphs['Class'] != 'Unknown'].copy()
+    
+    if len(graphs_labeled) < 10:
+        print(f"\n⚠️  Only {len(graphs_labeled)} labeled contracts.")
+        graphs_labeled = graphs
+    
+    # Top 5 클래스
+    top_classes = graphs_labeled['Class'].value_counts().head(5).index.tolist()
+    graphs_filter = graphs_labeled.query('Class in @top_classes').copy()
+    
+    print(f"\n{'='*50}")
+    print(f"Visualization - Top {len(top_classes)} Classes")
+    print(f"{'='*50}")
+    for i, cls in enumerate(top_classes, 1):
+        count = len(graphs_filter[graphs_filter['Class'] == cls])
+        print(f"{i}. {cls}: {count} contracts")
+    
+    # Figure 1: Class별 Boxplot
+    metrics = ['Num_edges', 'Assortativity', 'Reciprocity',
+               'Effective_Diameter', 'Clustering_Coefficient']
+    available_metrics = [m for m in metrics if m in graphs_filter.columns]
+    
+    if len(available_metrics) == 0:
+        print("\n❌ No metrics available.")
+        return
+    
+    print(f"\nPlotting metrics: {available_metrics}")
+    
+    fig, axes = plt.subplots(nrows=1, ncols=len(available_metrics), 
+                            figsize=(5*len(available_metrics), 5))
+    
+    if len(available_metrics) == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten()
+    
+    class_order = graphs_filter['Class'].value_counts().index
+    
+    for i, metric in enumerate(available_metrics):
+        sns.boxplot(x='Class', y=metric, data=graphs_filter, 
+                   order=class_order, ax=axes[i], palette='Set2')
+        axes[i].set_title(f'{metric}', fontsize=14, fontweight='bold')
+        axes[i].set_xlabel('')
+        axes[i].tick_params(axis='x', rotation=45)
+        
+        if metric in ['Num_nodes', 'Num_edges', 'Effective_Diameter']:
+            axes[i].set_yscale('log')
+    
+    plt.tight_layout()
+    plt.savefig(BASE_PATH / 'class_comparison.png', dpi=300, bbox_inches='tight')
+    print(f"\n✓ Figure 1 saved: {BASE_PATH / 'class_comparison.png'}")
+    plt.show()
+    
+    # Figure 2: Chain별 Boxplot
+    available_chains = [df for df in [bsc_graphs, ethereum_graphs, polygon_graphs] if not df.empty]
+    
+    if len(available_chains) < 2:
+        print("\n⚠️  Skip Figure 2: Need at least 2 chains.")
+        return
+    
+    def plot_grouped_boxplot(data_list, ax, metrics, labels, log=True):
+        combined_data = pd.concat(data_list)
+        valid_metrics = [m for m in metrics if m in combined_data.columns]
+        
+        if len(valid_metrics) == 0:
+            ax.text(0.5, 0.5, 'No data', ha='center', va='center')
+            return
+        
+        melted_data = combined_data.melt(
+            id_vars='Chain', 
+            value_vars=valid_metrics, 
+            var_name='Metric', 
+            value_name='Value'
+        )
+        
+        sns.boxplot(data=melted_data, x='Metric', y='Value', 
+                   hue='Chain', ax=ax, palette='Set2')
+        
+        if log:
+            ax.set_yscale('log')
+        
+        ax.set_xlabel('')
+        ax.set_ylabel('')
+        
+        valid_labels = [labels[i] for i, m in enumerate(metrics) if m in valid_metrics]
+        ax.set_xticklabels(valid_labels, rotation=0)
+        
+        if ax.get_legend():
+            ax.get_legend().remove()
+    
+    fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+    
+    plot_grouped_boxplot(available_chains, axes[0], 
+                        ['Num_nodes', 'Num_edges'], 
+                        ['Nodes', 'Edges'], True)
+    axes[0].set_title('(a) Network Size', fontsize=14, fontweight='bold')
+    
+    plot_grouped_boxplot(available_chains, axes[1], 
+                        ['Reciprocity', 'Clustering_Coefficient'], 
+                        ['Reciprocity', 'Clustering'], False)
+    axes[1].set_title('(b) Local Structure', fontsize=14, fontweight='bold')
+    
+    plot_grouped_boxplot(available_chains, axes[2], 
+                        ['Assortativity'], 
+                        ['Assortativity'], False)
+    axes[2].set_title('(c) Mixing Pattern', fontsize=14, fontweight='bold')
+    
+    plot_grouped_boxplot(available_chains, axes[3], 
+                        ['Effective_Diameter'], 
+                        ['Diameter'], True)
+    axes[3].set_title('(d) Global Distance', fontsize=14, fontweight='bold')
+    
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc='upper center', 
+                  bbox_to_anchor=(0.5, 0.98), ncol=3, 
+                  title='Blockchain', frameon=False)
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig(BASE_PATH / 'chain_comparison.png', dpi=300, bbox_inches='tight')
+    print(f"✓ Figure 2 saved: {BASE_PATH / 'chain_comparison.png'}")
+    plt.show()
+    
+    print("\n" + "="*70)
+    print("Analysis completed successfully! ✓")
+    print("="*70)
+
+
+if __name__ == "__main__":
+    main()

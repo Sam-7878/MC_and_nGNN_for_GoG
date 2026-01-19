@@ -20,7 +20,7 @@ def main():
     
     features = pd.merge(graphs1, graphs2, on='Contract')
     
-    labels = pd.read_csv('../../_data/data/labels.csv').query('Chain == @chain')
+    labels = pd.read_csv('../../_data/dataset/labels.csv').query('Chain == @chain')
     labels['binary_category'] = labels['Category'].apply(lambda x: 1 if x == 0 else 0)
     label_dict = dict(zip(labels.Contract, labels.binary_category))
     
@@ -33,7 +33,7 @@ def main():
                'Effective_Diameter', 'Clustering_Coefficient']
     features[columns] = scaler.fit_transform(features[columns])
     
-    features.to_csv(f'../../_data/data/features/{chain}_basic_metrics_processed.csv', index=False)
+    features.to_csv(f'../../_data/dataset/features/{chain}_basic_metrics_processed.csv', index=False)
 
 if __name__ == "__main__":
     main()

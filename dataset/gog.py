@@ -83,7 +83,7 @@ if __name__ == "__main__":
 
     args = get_args()
     chain = str(args.chain)
-    labels = pd.read_csv('../../_data/data/labels.csv').query('Chain == @chain').reset_index(drop=True)
+    labels = pd.read_csv('../../_data/dataset/labels.csv').query('Chain == @chain').reset_index(drop=True)
 
     ### Use three-class as an example.
     n = 3
@@ -94,10 +94,10 @@ if __name__ == "__main__":
     select_address = list(labels.query('Category in @select_class').Contract.values)
 
     # read in full global_graph
-    contract_mapping_file = f'../../_data/data/global_graph/{chain}_contract_to_number_mapping.json'
+    contract_mapping_file = f'../../_data/dataset/global_graph/{chain}_contract_to_number_mapping.json'
     contract_to_number = load_contract_mapping(contract_mapping_file)
     number_to_contract = {v: k for k, v in contract_to_number.items()}
-    global_graph = pd.read_csv(f'../../_data/data/global_graph/{chain}_graph_more_than_1_ratio.csv') 
+    global_graph = pd.read_csv(f'../../_data/dataset/global_graph/{chain}_graph_more_than_1_ratio.csv') 
 
     global_graph['Contract1'] = global_graph['Contract1'].apply(lambda x: number_to_contract[x])
     global_graph['Contract2'] = global_graph['Contract2'].apply(lambda x: number_to_contract[x])
@@ -109,7 +109,7 @@ if __name__ == "__main__":
     # read in transaction data
     transaction_dfs_select = []
     for i in tqdm(labels_select_df.Contract.values):
-        tx = pd.read_csv(f'../../_data/data/transactions/{chain}/{i}.csv')
+        tx = pd.read_csv(f'../../_data/dataset/transactions/{chain}/{i}.csv')
         tx['date'] = pd.to_datetime(tx['timestamp'], unit='s')
         transaction_dfs_select.append(tx)
 
