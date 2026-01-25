@@ -16,6 +16,7 @@ GoG/
 result/
 results/
 graphs/
+dataset/test/
 
 # test folders
 test_01/

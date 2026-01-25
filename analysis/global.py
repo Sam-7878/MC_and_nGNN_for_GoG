@@ -1,18 +1,21 @@
+import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
-import pandas as pd
-from collections import defaultdict
-import json
-import seaborn as sns
 import numpy as np
-import random
-from scipy.stats import pearsonr
 from tqdm import tqdm
+import pickle
+import os
+import random
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from scipy.stats import pearsonr
+import argparse
+import igraph as ig
+import sys
 
 import warnings
-warnings.filterwarnings("ignore")
+warnings.filterwarnings('ignore')
 
-import argparse
+
 
 parser = argparse.ArgumentParser(
     description='Analyze global_graph properties for a specified blockchain.',
@@ -32,169 +35,287 @@ parser.add_argument(
 
 args = parser.parse_args()
 chain = args.chain
-# read in labels file
-chain_labels = pd.read_csv(f'../../_data/dataset/labels.csv').query('Chain == @chain')
-chain_class = dict(zip(chain_labels.Contract, chain_labels.Category))
-
-global_link = pd.read_csv(f'../../_data/graphs/{chain}/{chain}_common_nodes_except_null_labels.csv') 
-
-global_link['Class1'] = global_link['Contract1'].map(chain_class)
-global_link['Class2'] = global_link['Contract2'].map(chain_class)
-
-global_link['Same_Class'] = global_link['Class1'] == global_link['Class2']
-global_link['Jaccard_Coefficient'] = global_link['Common_Nodes']/global_link['Unique_Addresses']
-filtered_link = global_link[global_link['Jaccard_Coefficient'] > 0]
-global_link = global_link.query('Contract1 in @chain_class and Contract2 in @chain_class')
 
 
-global_link['Contract1_short'] = global_link['Contract1'].apply(lambda x: x[0:6]+'...'+x[-6:])
-global_link['Contract2_short'] = global_link['Contract2'].apply(lambda x: x[0:6]+'...'+x[-6:])
-global_link[['Contract1_short', 'Contract2_short', 'Class1', 'Class2',
-             'Jaccard_Coefficient']].sort_values(by = 'Jaccard_Coefficient', ascending = False).head(5)
+print(f'Loading labels for {chain}...')
+labels = pd.read_csv(f'../../_data/dataset/labels.csv')
+chain_labels = labels.query('Chain == @chain')
+print(f'Found {len(chain_labels)} labels for {chain}')
 
 
-global_graph = nx.Graph()
-edges = zip(filtered_link['Contract1'], 
-            filtered_link['Contract2'], 
-            filtered_link['Jaccard_Coefficient'])
+print("Labels columns:", labels.columns.tolist())
+print("Unique Chain values:", labels['Chain'].unique().tolist())
+if chain_labels.empty:
+    print(f"No labels for {chain}. Skipping detailed mapping.")
+    class_mapping = {}
+else:
+    try:
+        class_mapping = dict(zip(chain_labels['Contract'], chain_labels['Category']))
+    except KeyError as e:
+        print(f"Column error: {e}. Check labels.csv columns.")
+        class_mapping = {}
 
-global_graph.add_weighted_edges_from(edges, weight='weight')
-print("Graph construction complete")
+
+print('Loading global_link...')
+global_link = pd.read_csv(
+    f'../../_data/graphs/{chain}/{chain}_common_nodes_except_null_labels.csv',
+    dtype={'Common_Nodes': 'int64', 'Unique_Addresses': 'int64'}
+)
+
+print('Mapping classes...')
+class_mapping = dict(zip(chain_labels['Contract'], chain_labels['Category']))
+global_link['Class1'] = global_link['Contract1'].map(class_mapping).fillna('Unknown')
+global_link['Class2'] = global_link['Contract2'].map(class_mapping).fillna('Unknown')
+
+# Vectorized string shortening (optimized, no apply)
+print('Shortening addresses...')
+global_link['Contract1_short'] = global_link['Contract1'].str[:6] + '...' + global_link['Contract1'].str[-6:]
+global_link['Contract2_short'] = global_link['Contract2'].str[:6] + '...' + global_link['Contract2'].str[-6:]
+
+# Filter links
+filtered_link = global_link[global_link['Class1'] != 'Unknown']
+filtered_link = filtered_link[filtered_link['Class2'] != 'Unknown']
+
+print('Building global_graph...')
 
 
-nodes = []
-for i in global_graph:
-    nodes.append(i)
-node_set = set(nodes)
+
+# CLI 지원
+parser = argparse.ArgumentParser(description='Global Graph Analysis with igraph')
+parser.add_argument('--chain', type=str, default='BSC', help='Blockchain chain (e.g., BSC, bsc)')
+args = parser.parse_args()
+chain = args.chain.lower()  # 'BSC' -> 'bsc' (데이터셋 기준)
+
+print(f'Loading labels for {chain}...')
+labels_path = f'../../_data/dataset/labels.csv'
+if not os.path.exists(labels_path):
+    raise FileNotFoundError(f"labels.csv not found: {labels_path}")
+
+labels = pd.read_csv(labels_path)
+print("Labels columns:", labels.columns.tolist())
+print("Unique Chain values:", labels['Chain'].unique().tolist())
+
+chain_labels = labels.query('Chain == @chain')
+print(f'Found {len(chain_labels)} labels for {chain}')
+
+if chain_labels.empty:
+    print(f"⚠️ No labels for {chain}. Exiting.")
+    sys.exit(1)
+
+# Class mapping (Contract/Category)
+class_mapping = dict(zip(chain_labels['Contract'], chain_labels['Category']))
+
+print('Loading global_link...')
+global_link_path = f'../../_data/graphs/{chain}/{chain}_common_nodes_except_null_labels.csv'
+if not os.path.exists(global_link_path):
+    raise FileNotFoundError(f"Global link CSV not found: {global_link_path}")
+global_link = pd.read_csv(
+    global_link_path,
+    dtype={'Common_Nodes': 'int64', 'Unique_Addresses': 'int64'}
+)
+
+print('Mapping classes...')
+global_link['Class1'] = global_link['Contract1'].map(class_mapping).fillna('Unknown')
+global_link['Class2'] = global_link['Contract2'].map(class_mapping).fillna('Unknown')
+
+print('Shortening addresses...')
+global_link['Contract1_short'] = global_link['Contract1'].str[:6] + '...' + global_link['Contract1'].str[-6:]
+global_link['Contract2_short'] = global_link['Contract2'].str[:6] + '...' + global_link['Contract2'].str[-6:]
+
+# Filter links
+filtered_link = global_link[global_link['Class1'] != 'Unknown']
+filtered_link = filtered_link[filtered_link['Class2'] != 'Unknown']
+if filtered_link.empty:
+    print("⚠️ No filtered links. Exiting.")
+    sys.exit(1)
+
+
+
+
+
+# ✅ 수정: 3-tuple로 weight 전달
+print('Building global_graph with igraph (faster for large graphs)...')
+sources = filtered_link['Contract1'].tolist()
+targets = filtered_link['Contract2'].tolist()
+common_nodes_orig = filtered_link['Common_Nodes'].tolist()
+
+# ✅ Distance weight (shortest path용)
+distance_weights = [1.0 / max(cn, 1) for cn in common_nodes_orig]
+
+# 그래프 생성: distance weight를 'weight'로 사용 (igraph 기본)
+edge_tuples = [(src, tgt, dist) for src, tgt, dist in zip(sources, targets, distance_weights)]
+global_graph = ig.Graph.TupleList(edge_tuples, weights=True)
+
+# ✅ 원본 Common_Nodes를 별도 edge attribute로 저장
+global_graph.es['common_nodes'] = common_nodes_orig
+
+print(f'Global graph built: {global_graph.vcount()} nodes, {global_graph.ecount()} edges')
+print(f"Distance weight sample (for path): {global_graph.es['weight'][:5]}")
+print(f"Common_Nodes sample (for centrality): {global_graph.es['common_nodes'][:5]}")
+
+
+
+
+
+# Tx counts (병렬 처리)
+cache_file = f'../../_data/transactions/{chain}_tx_counts.pkl'
+chain_dir = f'../../_data/dataset/transactions/{chain}'
+
+def count_tx(addr, chain_dir):
+    try:
+        tx_path = f'{chain_dir}/{addr}.csv'
+        if os.path.exists(tx_path):
+            tx = pd.read_csv(tx_path, dtype={'timestamp': 'int64'})
+            tx['timestamp'] = pd.to_datetime(tx['timestamp'], unit='s')
+            end_date = pd.Timestamp('2024-03-01')
+            return addr, tx[tx['timestamp'] < end_date].shape[0]
+    except Exception:
+        pass
+    return addr, 0
 
 number_of_transactions = {}
-for addr in tqdm(chain_class):
-    try:
-        tx = pd.read_csv(f'../../_data/dataset/transactions/{chain}/{addr}.csv')
-        tx['timestamp'] = pd.to_datetime(tx['timestamp'], unit='s')
-        end_date = pd.Timestamp('2024-03-01')
-        tx = tx[tx['timestamp'] < end_date]
-        
-        number_of_transactions[addr] = tx.shape[0]
-    except Exception as e:
-        print(f'Error for address {addr}: {e}')
+if os.path.exists(cache_file):
+    print("Loading cached tx counts...")
+    with open(cache_file, 'rb') as f:
+        number_of_transactions = pickle.load(f)
+else:
+    print("Computing tx counts in parallel (one-time)...")
+    addrs = list(class_mapping.keys())
+    with ProcessPoolExecutor(max_workers=min(16, os.cpu_count() or 8)) as executor:
+        futures = [executor.submit(count_tx, addr, chain_dir) for addr in tqdm(addrs, desc="Submit")]
+        for future in tqdm(as_completed(futures), total=len(addrs), desc="Process"):
+            addr, count = future.result()
+            number_of_transactions[addr] = count
+    os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+    with open(cache_file, 'wb') as f:
+        pickle.dump(number_of_transactions, f)
+    print(f"Cached to {cache_file}")
 
+# Add tx_count to nodes (igraph: vertex index로 매핑)
+node_names = [v['name'] for v in global_graph.vs]
+tx_counts = [number_of_transactions.get(name, 0) for name in node_names]
+global_graph.vs['tx_count'] = tx_counts
 
+# Metrics
+density = global_graph.density()
+print(f"Density: {density}")
+
+# Avg shortest path (approx)
 def approximate_average_shortest_path_length(G, num_landmarks=10):
-    nodes = list(G.nodes())
-    landmarks = random.sample(nodes, k=num_landmarks)
-    total_path_length = 0
-    total_paths = 0
+    nodes = list(range(G.vcount()))
+    landmarks = np.random.choice(nodes, min(num_landmarks, G.vcount()), replace=False)
+    total_dist = 0
+    count = 0
+    for landmark in tqdm(landmarks, desc="Avg shortest path"):
+        dists = G.distances(landmark, weights='weight')[0]  # ✅ weights='weight'
+        finite_dists = [d for d in dists if np.isfinite(d)]
+        total_dist += sum(finite_dists)
+        count += len(finite_dists)
+    return total_dist / count if count > 0 else 0
 
-    for landmark in landmarks:
-        path_lengths = nx.single_source_shortest_path_length(G, landmark)
-        total_path_length += sum(path_lengths.values())
-        total_paths += len(path_lengths) - 1  # Exclude the path to itself
+avg_shortest_path = approximate_average_shortest_path_length(global_graph)
+print(f"Average shortest path length (approx): {avg_shortest_path}")
 
-    return total_path_length / total_paths if total_paths > 0 else None
-
-def calculate_effective_diameter(G, percentile=90):
+# Effective diameter
+def approximate_effective_diameter(G, num_samples=10000, percentile=90):
+    nodes = list(range(G.vcount()))
     path_lengths = []
-    nodes = list(G.nodes())
+    for _ in tqdm(range(num_samples), desc="Effective diameter"):
+        if G.vcount() < 2:
+            break
+        src, dst = random.sample(nodes, 2)
+        dist = G.distances(src, dst, weights='weight')[0][0]
+        if np.isfinite(dist):
+            path_lengths.append(dist)
+    return np.percentile(path_lengths, percentile) if path_lengths else None
 
-    for node in nodes:
-        lengths = nx.single_source_shortest_path_length(G, node)
-        path_lengths.extend(lengths.values())
+effective_diameter = approximate_effective_diameter(global_graph)
+print(f"Effective diameter (approx): {effective_diameter}")
 
-    if path_lengths:
-        return np.percentile(path_lengths, percentile)
-    else:
-        return None
+# Clustering & Diameter (igraph native - ultra fast!)
+avg_clustering = global_graph.transitivity_avglocal_undirected()  # local clustering mean
+print(f"Average clustering coefficient: {avg_clustering}")
 
-
-num_nodes = global_graph.number_of_nodes()
-print("Number of Nodes:", num_nodes)
-
-num_edges = global_graph.number_of_edges()
-print("Number of Edges:", num_edges)
-
-density = nx.density(global_graph)
-print("Density:", density)
-
-average_degree = sum(dict(global_graph.degree()).values()) / num_nodes if num_nodes > 0 else 0
-print("Average Degree:", average_degree)
-
-if num_nodes > 1:
-    assortativity = nx.degree_assortativity_coefficient(global_graph)
-    print("Assortativity:", assortativity)
-else:
-    print("Assortativity: Not applicable")
-
-reciprocity = nx.overall_reciprocity(global_graph) if num_nodes > 0 else 0
-print("Reciprocity:", reciprocity)
-
-average_shortest_path_length = approximate_average_shortest_path_length(global_graph)
-print("Average Shortest Path Length:", average_shortest_path_length)
-
-effective_diameter = calculate_effective_diameter(global_graph)
-print("Effective Diameter:", effective_diameter)
-
-if num_nodes > 0:
-    clustering_coefficient = nx.average_clustering(global_graph.to_undirected())
-    print("Clustering Coefficient:", clustering_coefficient)
-else:
-    print("Clustering Coefficient: Not applicable")
+print("Computing exact diameter (igraph fast)...")
+diameter_exact = global_graph.diameter(weights='weight')
+print(f"Exact weighted diameter: {diameter_exact}")
 
 
 
-unweighted_degree_centrality = {node: len(global_graph.edges(node)) for node in global_graph.nodes()}
-top_5_unweighted_degree = sorted(unweighted_degree_centrality.items(), key=lambda item: item[1], reverse=True)[:5]
 
-weighted_degree_centrality = {node: sum(data['weight'] for _, _, data in global_graph.edges(node, data=True)) for node in global_graph.nodes()}
-top_5_weighted_degree = sorted(weighted_degree_centrality.items(), key=lambda item: item[1], reverse=True)[:5]
+# Centrality
+# Centrality: 두 종류 계산
+unweighted_degree = global_graph.degree()
+weighted_degree_distance = global_graph.strength(weights='weight')  # Distance weight 합
+weighted_degree_common = global_graph.strength(weights='common_nodes')  # ✅ 원본 weight 합
 
-top_5_unweighted_degree_address = [i[0] for i in top_5_unweighted_degree]
-top_5_weighted_degree_address = [i[0] for i in top_5_weighted_degree]
+top_5_unweighted = sorted(enumerate(unweighted_degree), key=lambda x: x[1], reverse=True)[:5]
+top_5_weighted = sorted(enumerate(weighted_degree_common), key=lambda x: x[1], reverse=True)[:5]  # ✅ common_nodes 사용
 
-y_values = [number_of_transactions[node] for node in global_graph.nodes()]
-x_values = [unweighted_degree_centrality[node] for node in global_graph.nodes()]
+print("Top 5 unweighted degree:", [(node_names[i], d) for i, d in top_5_unweighted])
+print("Top 5 weighted degree (Common_Nodes):", [(node_names[i], d) for i, d in top_5_weighted])
 
-# Calculate Pearson correlation coefficient and p-value
-correlation, p_value = pearsonr(x_values, y_values)
+# Correlation: unweighted vs weighted (common_nodes)
+corr_degree, _ = pearsonr(unweighted_degree, weighted_degree_common)
+print(f"Pearson correlation (unweighted vs weighted): {corr_degree}")
 
-# Plotting the scatter plot
-plt.figure(figsize=(8, 6))
-plt.scatter(x_values, y_values, color='blue')
-plt.yscale('log')
-plt.xlabel('Node Degree Centrality (Global)')
-plt.ylabel('Number of Transactions (Local)')
-plt.annotate(f'Pearson r: {correlation:.2f}, p-value: {p_value:.3f}', xy=(0.05, 0.95), xycoords='axes fraction', verticalalignment='top')
-plt.show()
 
-print("Pearson correlation coefficient:", correlation)
-print("P-value:", p_value)
 
-# Plot edge weight distribution
-edge_weights = [data['weight'] for _, _, data in global_graph.edges(data=True)]
-print(max(edge_weights))
 
-edge_weights_sorted = np.sort(edge_weights)
-cdf = np.arange(1, len(edge_weights_sorted) + 1) / len(edge_weights_sorted)
 
-edge_weight_75 = np.percentile(edge_weights_sorted, 75)
-edge_weight_90 = np.percentile(edge_weights_sorted, 90)
 
-plt.figure(figsize=(5, 3))
-plt.plot(edge_weights_sorted, cdf, label='CDF of Edge Weights')
-plt.xlabel('Edge Weight')
-plt.ylabel('CDF (Percentage)')
+# Scatter plot: unweighted vs weighted (common_nodes)
+plt.figure(figsize=(10, 8))
+plt.scatter(unweighted_degree, weighted_degree_common, alpha=0.5)  # ✅ common_nodes
+plt.xlabel('Unweighted Degree')
+plt.ylabel('Weighted Degree (Common Nodes)')
+plt.title(f'{chain.upper()}: Degree Centrality')
+os.makedirs('../../_data/results/analysis', exist_ok=True)
+plt.savefig(f'../../_data/results/analysis/{chain}_degree_scatter.png', dpi=300, bbox_inches='tight')
+plt.close()
+print(f"Plot saved: ../../_data/results/analysis/{chain}_degree_scatter.png")
 
-plt.axhline(y=0.75, color='red', linestyle='--', label='75% Threshold')
-plt.axhline(y=0.90, color='green', linestyle='--', label='90% Threshold')
 
-plt.scatter(edge_weight_75, 0.75, color='red', marker='o')
-plt.scatter(edge_weight_90, 0.90, color='green', marker='o')
 
-# Annotating the edge weights
-plt.annotate(f'weight = {edge_weight_75:.3f}', xy=(0.4, 0.7), xytext=(10, -10),
-             textcoords='offset points', ha='right', va='bottom', color='red')
-plt.annotate(f'weight = {edge_weight_90:.3f}', xy=(0.4, 0.85), xytext=(10, 10),
-             textcoords='offset points', ha='right', va='bottom', color='green')
+# Edge weights histogram: 원본 Common_Nodes 사용
+edge_weights_common = global_graph.es['common_nodes']  # ✅ 수정
+plt.figure(figsize=(10, 6))
+plt.hist(edge_weights_common, bins=50, edgecolor='black', alpha=0.7)
+plt.xlabel('Common Nodes (Edge Weight)')
+plt.ylabel('Frequency')
+plt.title(f'{chain.upper()}: Edge Weights Distribution')
+plt.savefig(f'../../_data/results/analysis/{chain}_edge_weights.png', dpi=300, bbox_inches='tight')
+plt.close()
+print(f"Plot saved: ../../_data/results/analysis/{chain}_edge_weights.png")
 
-plt.legend()
-plt.show()
+
+
+# Monte Carlo Risk Estimation
+def monte_carlo_risk_estimation(G, num_samples=1000):
+    nodes = list(range(G.vcount()))
+    risks = []
+    for _ in range(num_samples):
+        node = random.choice(nodes)
+        tx_count = G.vs[node]['tx_count']
+        degree = G.degree(node)
+        risk = tx_count * degree
+        risks.append((node, risk))
+    risks_sorted = sorted(risks, key=lambda x: x[1], reverse=True)
+    return {
+        'mean_risk': np.mean([r for _, r in risks]),
+        'p95_risk': np.percentile([r for _, r in risks], 95),
+        'top_risk_nodes': [(node_names[i], r) for i, r in risks_sorted[:5]]
+    }
+
+mc_risk = monte_carlo_risk_estimation(global_graph)
+print("MC Risk Estimation:")
+print(f"  Mean risk: {mc_risk['mean_risk']}")
+print(f"  P95 risk: {mc_risk['p95_risk']}")
+print(f"  Top 5 risk nodes: {mc_risk['top_risk_nodes']}")
+
+# Cache graph
+graph_cache = f'../../_data/graphs/{chain}_global_graph.graphml'
+global_graph.write_graphml(graph_cache)
+print(f"Graph cached to {graph_cache}")
+
+print("\n✅ Analysis complete!")

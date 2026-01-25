@@ -271,21 +271,74 @@ def print_statistics(df: pd.DataFrame, chain_name: str = "All"):
         print(stats.to_string())
 
 
-# ==================== Main Analysis ====================
+# local.py 상단에 추가
 
+def detect_category_scheme(labels_df: pd.DataFrame) -> dict:
+    """
+    실제 데이터의 Category 값을 분석하여 적절한 매핑 제안
+    """
+    unique_categories = sorted(labels_df['Category'].dropna().unique())
+    num_categories = len(unique_categories)
+    
+    print(f"\n{'='*50}")
+    print(f"Detected {num_categories} unique categories: {unique_categories}")
+    print(f"{'='*50}")
+    
+    # 카테고리 수에 따라 매핑 제안
+    if num_categories <= 5:
+        print("→ Suggests: Basic classification (Normal, Phishing, Ponzi, Scam, Honeypot)")
+        suggested_mapping = {
+            0: 'Normal',
+            1: 'Phishing',
+            2: 'Ponzi',
+            3: 'Scam',
+            4: 'Honeypot',
+        }
+    elif num_categories <= 10:
+        print("→ Suggests: Extended DeFi classification")
+        suggested_mapping = {
+            0: 'Normal',
+            1: 'Phishing',
+            2: 'Ponzi_Scheme',
+            3: 'Honeypot',
+            4: 'Balance_Disorder',
+            5: 'Hidden_Transfer',
+            6: 'Fake_Token',
+            7: 'Rug_Pull',
+            8: 'Pump_Dump',
+            9: 'Other_Scam',
+        }
+    else:
+        print("→ Suggests: Check original dataset documentation")
+        suggested_mapping = {i: f'Category_{i}' for i in unique_categories}
+    
+    return suggested_mapping
+
+
+# ==================== Main Analysis ====================
+# main() 함수 시작 부분 수정
 def main():
     print("="*70)
     print("Local Graph Analysis - Cross-Chain Comparison")
     print("="*70)
-    print(f"Base path: {BASE_PATH}")
-    print(f"Labels path: {LABELS_PATH}")
     
-    # Labels 로드 (Category → Label 매핑 포함)
+    # Labels 로드
     labels_df = load_labels(LABELS_PATH)
     
     if labels_df.empty:
         print("\n❌ Cannot load labels.csv")
         return
+    
+    # ✅ 자동 카테고리 감지 및 제안
+    suggested_mapping = detect_category_scheme(labels_df)
+    
+    print("\n" + "="*50)
+    print("Suggested Category Mapping:")
+    print("="*50)
+    for cat_id, cat_name in sorted(suggested_mapping.items()):
+        count = len(labels_df[labels_df['Category'] == cat_id])
+        print(f"  {cat_id}: {cat_name:20s} ({count:5d} contracts)")
+    
     
     # Label 분포 미리 확인
     if 'Label' in labels_df.columns and 'Chain' in labels_df.columns:
