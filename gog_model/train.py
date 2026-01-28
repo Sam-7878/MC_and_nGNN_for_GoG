@@ -17,6 +17,9 @@ from sklearn.metrics import (
     classification_report
 )
 from tqdm import tqdm
+import csv
+from datetime import datetime
+
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -39,7 +42,6 @@ def safe_collate_fn(batch):
         return None
 
 
-
 class MCGraphDataset(Dataset):
     """Graph dataset with Monte Carlo sampling support"""
     
@@ -52,12 +54,43 @@ class MCGraphDataset(Dataset):
         
         # Load split information
         labels_df = pd.read_csv(os.path.join(data_dir, 'labels_split.csv'))
-        self.labels_df = labels_df  # ✅ FIXED: Save labels_df
-        self.graph_ids = labels_df[labels_df['Split'] == split].index.tolist()
+        self.labels_df = labels_df
+        potential_graph_ids = labels_df[labels_df['Split'] == split].index.tolist()
+        
+        # ✅ 실제 존재하는 파일만 필터링
+        self.graph_ids = []
+        self.data_cache = {}
+        
+        print(f"Checking {len(potential_graph_ids)} potential graphs...")
+        for gid in potential_graph_ids:
+            filepath = os.path.join(self.data_dir, f'{gid}.json')
+            
+            if os.path.exists(filepath):
+                try:
+                    with open(filepath, 'r') as f:
+                        data = json.load(f)
+                    
+                    # ✅ 기본 검증
+                    if ('features' in data and 'edges' in data and 'label' in data):
+                        if len(data['features']) > 0 and len(data['edges']) > 0:
+                            self.graph_ids.append(gid)
+                            # ✅ 캐싱하지 않음 (메모리 절약)
+                        else:
+                            print(f"⚠️  Skipping graph {gid}: Empty features or edges")
+                    else:
+                        print(f"⚠️  Skipping graph {gid}: Missing required keys")
+                        
+                except Exception as e:
+                    print(f"⚠️  Skipping graph {gid}: Load error - {e}")
+            else:
+                print(f"⚠️  Skipping graph {gid}: File not found")
+        
+        if len(self.graph_ids) == 0:
+            raise ValueError(f"No valid graphs found in {data_dir} for split {split}")
         
         print(f"Loaded {len(self.graph_ids)} graphs (MC={mc_samples}, Training={training})")
         
-        # Fit scaler on training data
+        # ✅ Fit scaler on training data with validation
         if self.scaler is None and split == 'train':
             print(f"Fitting RobustScaler on training data...")
             all_features = []
@@ -74,16 +107,21 @@ class MCGraphDataset(Dataset):
                     node_ids = sorted([int(k) for k in features_dict.keys()])
                     features = np.array([features_dict[str(i)] for i in node_ids], dtype=np.float32)
                     
-                    # Clip extreme values
-                    features = np.clip(features, -100, 100)
-                    features = np.nan_to_num(features, nan=0.0, posinf=100.0, neginf=-100.0)
+                    # ✅ NaN/Inf 방지
+                    features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
                     
-                    all_features.append(features)
+                    # ✅ Extreme value clipping
+                    features = np.clip(features, -1000, 1000)
+                    
+                    # ✅ 유효한 feature만 추가
+                    if not np.isnan(features).any() and not np.isinf(features).any():
+                        all_features.append(features)
                     
                 except Exception as e:
+                    print(f"⚠️  Skipping graph {gid} during scaler fitting: {e}")
                     continue
             
-            if all_features:
+            if len(all_features) > 0:
                 all_features = np.vstack(all_features)
                 
                 self.scaler = RobustScaler()
@@ -101,7 +139,7 @@ class MCGraphDataset(Dataset):
         filepath = os.path.join(self.data_dir, f'{graph_id}.json')
         
         if not os.path.exists(filepath):
-            return None
+            raise FileNotFoundError(f"Graph file not found: {filepath}")
         
         try:
             with open(filepath, 'r') as f:
@@ -111,12 +149,12 @@ class MCGraphDataset(Dataset):
             node_ids = sorted([int(k) for k in features_dict.keys()])
             features = np.array([features_dict[str(i)] for i in node_ids], dtype=np.float32)
             
-            # Clip and clean
-            features = np.clip(features, -100, 100)
-            
+            # ✅ NaN/Inf 방지
             if np.isnan(features).any() or np.isinf(features).any():
-                print(f"⚠️  Cleaning NaN/Inf in graph {graph_id}")
-                features = np.nan_to_num(features, nan=0.0, posinf=100.0, neginf=-100.0)
+                features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            # ✅ Extreme value clipping
+            features = np.clip(features, -1000, 1000)
             
             # Apply scaler
             if self.scaler is not None:
@@ -124,57 +162,70 @@ class MCGraphDataset(Dataset):
                     features = self.scaler.transform(features)
                     features = np.clip(features, -10, 10)
                     
+                    # ✅ 스케일링 후에도 NaN/Inf 체크
                     if np.isnan(features).any() or np.isinf(features).any():
                         features = np.nan_to_num(features, nan=0.0, posinf=10.0, neginf=-10.0)
                         
                 except Exception as e:
                     print(f"⚠️  Scaler transform failed for graph {graph_id}: {str(e)}")
+                    # ✅ Fallback: Min-Max normalization
                     feat_min = features.min(axis=0)
                     feat_max = features.max(axis=0)
                     feat_range = feat_max - feat_min
                     feat_range[feat_range == 0] = 1.0
                     features = (features - feat_min) / feat_range
-                    features = features * 2 - 1
+                    features = features * 2 - 1  # Scale to [-1, 1]
+            
+            # ✅ 최종 검증
+            if len(features) == 0:
+                raise ValueError(f"Empty features after processing")
             
             x = torch.tensor(features, dtype=torch.float)
             edges = data['edges']
+            
+            if len(edges) == 0:
+                raise ValueError(f"Empty edges")
+            
             edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
             y = torch.tensor([data['label']], dtype=torch.long)
             
             return Data(x=x, edge_index=edge_index, y=y)
             
         except Exception as e:
-            print(f"⚠️  Error loading graph {graph_id}: {str(e)}")
-            return None
+            raise RuntimeError(f"Error loading graph {graph_id}: {str(e)}")
     
     def __len__(self):
         return len(self.graph_ids)
     
     def __getitem__(self, idx):
-        max_retries = 5
+        """
+        ✅ 절대 None을 반환하지 않음 - 실패 시 예외 발생
+        """
+        # ✅ 먼저 유효한 인덱스로 접근
+        graph_id = self.graph_ids[idx]
         
-        for retry in range(max_retries):
-            try:
-                graph_id = self.graph_ids[(idx + retry) % len(self.graph_ids)]
-                
-                if self.training and self.mc_samples > 1:
-                    graphs = []
-                    for _ in range(self.mc_samples):
-                        graph = self._load_graph(graph_id)
-                        if graph is not None:
-                            graphs.append(graph)
-                    
-                    if graphs:
-                        return graphs
-                else:
+        try:
+            if self.training and self.mc_samples > 1:
+                graphs = []
+                for _ in range(self.mc_samples):
                     graph = self._load_graph(graph_id)
                     if graph is not None:
-                        return graph
-                        
-            except Exception as e:
-                continue
-        
-        return self._load_graph(self.graph_ids[0])
+                        graphs.append(graph)
+                
+                if len(graphs) > 0:
+                    return graphs
+                else:
+                    raise ValueError(f"No valid MC samples for graph {graph_id}")
+            else:
+                graph = self._load_graph(graph_id)
+                if graph is None:
+                    raise ValueError(f"Failed to load graph {graph_id}")
+                return graph
+                
+        except Exception as e:
+            # ✅ None 대신 예외를 발생시켜 DataLoader가 적절히 처리하도록 함
+            print(f"❌ Error in __getitem__ for index {idx} (graph_id={graph_id}): {e}")
+            raise
 
 
 class GoGMCModel(torch.nn.Module):
@@ -226,7 +277,7 @@ class GoGMCModel(torch.nn.Module):
         
         return x
 
-# ===================== MC Trainer (안정화) =====================
+
 class MCTrainer:
     def __init__(self, model, device, mc_samples_train=1, mc_samples_eval=10, class_weights=None):
         self.model = model
@@ -282,7 +333,7 @@ class MCTrainer:
     
     def evaluate(self, loader, criterion):
         """Evaluate with MC dropout for uncertainty estimation"""
-        self.model.train()  # ✅ Keep dropout active for MC sampling
+        self.model.train()  # Keep dropout active for MC sampling
         
         all_preds = []
         all_probs = []
@@ -309,11 +360,11 @@ class MCTrainer:
                         mc_logits.append(F.softmax(logits, dim=1))
                     
                     # Aggregate predictions
-                    mc_probs = torch.stack(mc_logits, dim=0)  # [mc_samples, batch_size, n_classes]
+                    mc_probs = torch.stack(mc_logits, dim=0)
                     mean_probs = mc_probs.mean(dim=0)
                     std_probs = mc_probs.std(dim=0)
                     
-                    # Uncertainty (mean of std across classes)
+                    # Uncertainty
                     uncertainty = std_probs.mean(dim=1)
                     
                     # Prediction
@@ -350,7 +401,7 @@ class MCTrainer:
         all_uncertainties = np.array(all_uncertainties)
         
         # Metrics
-        acc = accuracy_score(all_labels, all_preds)  # ✅ 이제 정의됨!
+        acc = accuracy_score(all_labels, all_preds)
         f1 = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
         
         # AUC (multi-class)
@@ -419,24 +470,32 @@ def main():
             print(f"⚠️  Corrupted checkpoint. Removing...")
             os.remove(model_save_path)
     
-    # Datasets
-    train_dataset = MCGraphDataset(data_dir, 'train', mc_samples=1, training=True)
-    val_dataset = MCGraphDataset(data_dir, 'val', mc_samples=1, training=False, scaler=train_dataset.scaler)
-    test_dataset = MCGraphDataset(data_dir, 'test', mc_samples=1, training=False, scaler=train_dataset.scaler)
+    # ✅ Datasets with validation
+    try:
+        train_dataset = MCGraphDataset(data_dir, 'train', mc_samples=1, training=True)
+        val_dataset = MCGraphDataset(data_dir, 'val', mc_samples=1, training=False, scaler=train_dataset.scaler)
+        test_dataset = MCGraphDataset(data_dir, 'test', mc_samples=1, training=False, scaler=train_dataset.scaler)
+    except Exception as e:
+        print(f"❌ Error loading datasets: {e}")
+        print(f"💡 Please regenerate the dataset using gog.py")
+        return
     
     print(f"Dataset: Train={len(train_dataset)}, Val={len(val_dataset)}, Test={len(test_dataset)}")
     
     # DataLoaders
     num_workers = 0 if os.name == 'nt' else 4
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=num_workers)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, 
+                              num_workers=num_workers, collate_fn=safe_collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, 
+                            num_workers=num_workers, collate_fn=safe_collate_fn)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, 
+                             num_workers=num_workers, collate_fn=safe_collate_fn)
     
-    # ✅ FIXED: Use 'Category' instead of 'Label'
+    # Class weights
     print(f"📊 CSV columns: {train_dataset.labels_df.columns.tolist()}")
     
-    class_counts = train_dataset.labels_df['Category'].value_counts().sort_index()
-    total_samples = len(train_dataset.labels_df)
+    class_counts = train_dataset.labels_df[train_dataset.labels_df['Split'] == 'train']['Category'].value_counts().sort_index()
+    total_samples = len(train_dataset.labels_df[train_dataset.labels_df['Split'] == 'train'])
     
     print(f"📊 Class distribution: {class_counts.to_dict()}")
     
@@ -471,49 +530,91 @@ def main():
     best_val_f1 = 0
     patience_counter = 0
     patience = 20
-    
+
+
+    ## CSV 로그 기록
+    # ---------- 1) CSV 파일명 생성 ----------
+    # 날짜-시각 문자열 (파일명에 안전하도록 초단위까지만)
+    time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # argument 중 중요한 옵치션만 뽑아 짧게 조합
+    # 예) chain, hidden_dim, dropout, lr, batch_size
+    arg_tag = (f"{args.chain}_"
+            f"hid{args.hidden_dim}_"
+            f"drop{args.dropout}_"
+            f"lr{args.lr:.0e}_"
+            f"bs{args.batch_size}")
+
+    csv_name = f"training_log_{time_str}_{arg_tag}.csv"
+    csv_path = os.path.join(os.path.dirname(model_save_path), csv_name)
+
+    # ---------- 2) CSV 헤더 한 번만 쓰기 ----------
+    if not os.path.isfile(csv_path):
+        pd.DataFrame(columns=[
+            "epoch", "train_loss", "train_acc",
+            "val_loss", "val_acc", "val_f1", "val_auc", "val_uncertainty",
+            "lr", "is_best"
+        ]).to_csv(csv_path, index=False)
+
+    # ---------- 3) 기존 학습 루프 ----------
     for epoch in range(args.epochs):
         print(f"\nEpoch {epoch+1}/{args.epochs}:")
-        
-        # Train
+
+        # ---- Train / Validate ----
         train_loss, train_acc = trainer.train_epoch(train_loader, optimizer, criterion)
-        print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2%}")
-        
-        # Validate
         val_metrics = trainer.evaluate(val_loader, criterion)
+        current_lr = optimizer.param_groups[0]["lr"]
+        scheduler.step(val_metrics["f1"])
+
+        # ---- 로그 출력 ----
+        print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2%}")
         print(f"Val Loss: {val_metrics['loss']:.4f}, "
-              f"Val Acc: {val_metrics['accuracy']:.2%}, "
-              f"F1: {val_metrics['f1']:.2%}, "
-              f"AUC: {val_metrics['auc']:.2%}, "
-              f"Uncertainty: {val_metrics['uncertainty']:.4f}")
-        
-        # Learning rate scheduling
-        scheduler.step(val_metrics['f1'])
-        
-        # Early stopping
-        if val_metrics['f1'] > best_val_f1:
-            best_val_f1 = val_metrics['f1']
+            f"Val Acc: {val_metrics['accuracy']:.2%}, "
+            f"F1: {val_metrics['f1']:.2%}, "
+            f"AUC: {val_metrics['auc']:.2%}, "
+            f"Uncertainty: {val_metrics['uncertainty']:.4f}")
+
+        # ---- best F1 체크 ----
+        is_best = val_metrics["f1"] > best_val_f1
+        if is_best:
+            best_val_f1 = val_metrics["f1"]
             patience_counter = 0
-            
+
+            # 4) 모델 pt 저장
             torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_f1': best_val_f1,
-                'scaler': train_dataset.scaler,
-                'input_dim': input_dim,
-                'hidden_dim': args.hidden_dim,
-                'n_classes': args.n_classes,
-                'dropout': args.dropout
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "val_f1": best_val_f1,
+                "scaler": train_dataset.scaler,
+                "input_dim": input_dim,
+                "hidden_dim": args.hidden_dim,
+                "n_classes": args.n_classes,
+                "dropout": args.dropout,
             }, model_save_path)
-            
             print(f"✅ New best F1: {best_val_f1:.2%}")
         else:
             patience_counter += 1
             if patience_counter >= patience:
                 print(f"Early stopping triggered after {epoch+1} epochs")
                 break
-    
+
+        # ---------- 5) 매 에포크마다 append ----------
+        row = {
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "train_acc": train_acc,
+            "val_loss": val_metrics["loss"],
+            "val_acc": val_metrics["accuracy"],
+            "val_f1": val_metrics["f1"],
+            "val_auc": val_metrics["auc"],
+            "val_uncertainty": val_metrics["uncertainty"],
+            "lr": optimizer.param_groups[0]["lr"],
+            "is_best": is_best,
+        }
+        pd.DataFrame([row]).to_csv(csv_path, mode="a", header=False, index=False)
+
+
     print(f"\n✅ Training completed! Best Val F1: {best_val_f1:.2%}")
     
     # Final Test Evaluation
@@ -539,4 +640,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
