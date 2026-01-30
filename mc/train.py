@@ -180,7 +180,7 @@ class MCGraphDataset(Dataset):
             if len(features) == 0:
                 raise ValueError(f"Empty features after processing")
             
-            x = torch.tensor(features, dtype=torch.float)
+            x = torch.tensor(features, dtype=torch.float32)
             edges = data['edges']
             
             if len(edges) == 0:
@@ -540,10 +540,13 @@ def main():
     # argument 중 중요한 옵치션만 뽑아 짧게 조합
     # 예) chain, hidden_dim, dropout, lr, batch_size
     arg_tag = (f"{args.chain}_"
-            f"hid{args.hidden_dim}_"
-            f"drop{args.dropout}_"
-            f"lr{args.lr:.0e}_"
-            f"bs{args.batch_size}")
+            f"n_classes-{args.n_classes}_"
+            f"mc_train-{args.mc_train}_"
+            f"mc_eval-{args.mc_eval}_"
+            f"hid-{args.hidden_dim}_"
+            f"drop-{args.dropout}_"
+            f"lr-{args.lr:.0e}_"
+            f"bs-{args.batch_size}")
 
     csv_name = f"training_log_{time_str}_{arg_tag}.csv"
     csv_path = os.path.join(os.path.dirname(model_save_path), csv_name)
