@@ -1,3 +1,4 @@
+# ngnn/analyze_data_structure.py
 # 먼저 현재 데이터가 hierarchical 구조를 지원하는지 확인이 필요합니다.
 # Step 1.1: 데이터 구조 확인
 

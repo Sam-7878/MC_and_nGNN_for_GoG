@@ -1,4 +1,4 @@
-# models/hierarchical_gnn.py
+# ngnn/hierarchical_gnn.py
 
 import torch
 import torch.nn as nn
