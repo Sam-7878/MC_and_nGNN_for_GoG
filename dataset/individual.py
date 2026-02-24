@@ -233,7 +233,7 @@ if __name__ == "__main__":
         labels_split = split_dfs[split]
         
         # 병렬 CSV 로드 (속도 10x↑)
-        cache_file = f'../../_data/dataset/{chain}_{split}_tx_cache.pkl'
+        cache_file = f'../../_data/dataset/caches/{chain}_{split}_tx_cache.pkl'
         if os.path.exists(cache_file):
             print("✅ Loading cached transaction data...")
             with open(cache_file, 'rb') as f:
