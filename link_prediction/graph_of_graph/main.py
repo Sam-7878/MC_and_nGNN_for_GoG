@@ -4,7 +4,6 @@ import torch
 import numpy as np
 from utils import tab_printer
 from train import Trainer
-from param_parser import parameter_parser
 import random
 
 def set_seed(seed: int):
@@ -13,8 +12,15 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+import argparse
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chain', type=str, default='polygon')
+    return parser.parse_args()
+
 def main():
-    args = parameter_parser()
+    args = get_args()
     tab_printer(args)
 
     results = {

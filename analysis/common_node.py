@@ -210,7 +210,8 @@ def save_results(common_nodes: Set[str], frequency_df: pd.DataFrame,
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # 공통 노드 저장
-    common_nodes_file = output_dir / f"{chain}_common_nodes_{timestamp}.csv"
+#    common_nodes_file = output_dir / f"{chain}_common_nodes_{timestamp}.csv"
+    common_nodes_file = output_dir / f"{chain}_common_nodes.csv"
     if common_nodes:
         pd.DataFrame(
             sorted(list(common_nodes)),
@@ -225,7 +226,8 @@ def save_results(common_nodes: Set[str], frequency_df: pd.DataFrame,
         logger.info(f"Empty common nodes file created: {common_nodes_file}")
     
     # 빈도 분석 결과 저장
-    frequency_file = output_dir / f"{chain}_node_frequency_{timestamp}.csv"
+#    frequency_file = output_dir / f"{chain}_node_frequency_{timestamp}.csv"
+    frequency_file = output_dir / f"{chain}_node_frequency.csv"
     if not frequency_df.empty:
         frequency_df.to_csv(frequency_file, index=False)
         saved_files['frequency'] = frequency_file
@@ -237,7 +239,8 @@ def save_results(common_nodes: Set[str], frequency_df: pd.DataFrame,
         logger.info(f"Empty frequency file created: {frequency_file}")
     
     # 요약 리포트 저장
-    summary_file = output_dir / f"{chain}_analysis_summary_{timestamp}.txt"
+#    summary_file = output_dir / f"{chain}_analysis_summary_{timestamp}.txt"
+    summary_file = output_dir / f"{chain}_analysis_summary.txt"
     with open(summary_file, 'w', encoding='utf-8') as f:
         f.write("="*70 + "\n")
         f.write(f"Common Node Analysis Summary for {chain.upper()}\n")
@@ -289,9 +292,9 @@ Examples:
   python common_node.py --chain eth
   
 Output files will be automatically saved to:
-  ../../_data/results/{chain}_common_nodes_TIMESTAMP.csv
-  ../../_data/results/{chain}_node_frequency_TIMESTAMP.csv
-  ../../_data/results/{chain}_analysis_summary_TIMESTAMP.txt
+  ../../_data/results/graphs/{chain}/{chain}_common_nodes.csv
+  ../../_data/results/graphs/{chain}/{chain}_node_frequency.csv
+  ../../_data/results/graphs/{chain}/{chain}_analysis_summary.txt
         """
     )
     parser.add_argument(
@@ -306,7 +309,7 @@ Output files will be automatically saved to:
     # ✅ 자동 경로 설정 (chain 옵션만으로 모든 경로 결정)
     # transactions 폴더 사용 (processed 아님)
     data_dir = Path(__file__).parent.parent.parent / '_data'  / 'dataset' / 'transactions'
-    output_dir = Path(__file__).parent.parent.parent / '_data' / 'results' / 'analysis' 
+    output_dir = Path(__file__).parent.parent.parent / '_data' / 'graphs' / args.chain
     
     logger.info("="*70)
     logger.info(f"Starting Common Node Analysis")

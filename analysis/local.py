@@ -16,6 +16,7 @@ warnings.filterwarnings("ignore")
 # ==================== Configuration ====================
 
 BASE_PATH = Path('../../_data/results/analysis/')
+IMAGE_PATH = Path('../../_data/results/analysis/images/')
 LABELS_PATH = Path('../../_data/dataset/labels.csv')
 
 # ✅ Category 매핑 (프로젝트에 맞게 수정 필요!)
@@ -46,7 +47,7 @@ CATEGORY_MAPPING = {
 
 # 파일명 패턴
 FILE_PATTERNS = {
-    'nx': '{chain}_basic_metrics_maxd2000.csv',
+    'nx': '{chain}_basic_metrics.csv',
     'snap': '{chain}_snap_metrics_labels.csv',
     'common': '{chain}_common_nodes.csv'
 }
@@ -135,8 +136,8 @@ def find_file(base_path: Path, chain: str, file_type: str) -> Path:
     # Fallback
     possible_patterns = {
         'nx': [
-            f'{chain}_basic_metrics_maxd2000.csv',
             f'{chain}_basic_metrics.csv',
+            f'{chain}_basic_metrics_maxd2000.csv',
         ],
         'snap': [
             f'{chain}_snap_metrics_labels.csv',
@@ -432,8 +433,8 @@ def main():
             axes[i].set_yscale('log')
     
     plt.tight_layout()
-    plt.savefig(BASE_PATH / 'class_comparison.png', dpi=300, bbox_inches='tight')
-    print(f"\n✓ Figure 1 saved: {BASE_PATH / 'class_comparison.png'}")
+    plt.savefig(IMAGE_PATH / 'class_comparison.png', dpi=300, bbox_inches='tight')
+    print(f"\n✓ Figure 1 saved: {IMAGE_PATH / 'class_comparison.png'}")
     plt.show()
     
     # Figure 2: Chain별 Boxplot
@@ -502,8 +503,8 @@ def main():
                   title='Blockchain', frameon=False)
     
     plt.tight_layout(rect=[0, 0, 1, 0.95])
-    plt.savefig(BASE_PATH / 'chain_comparison.png', dpi=300, bbox_inches='tight')
-    print(f"✓ Figure 2 saved: {BASE_PATH / 'chain_comparison.png'}")
+    plt.savefig(IMAGE_PATH / 'chain_comparison.png', dpi=300, bbox_inches='tight')
+    print(f"✓ Figure 2 saved: {IMAGE_PATH / 'chain_comparison.png'}")
     plt.show()
     
     print("\n" + "="*70)

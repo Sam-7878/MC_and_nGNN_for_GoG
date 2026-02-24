@@ -159,7 +159,7 @@ def main():
     labels_final = pd.concat([train_labels, val_labels, test_labels]).reset_index(drop=True)
     
     # 저장 (디렉토리 생성 보장)
-    os.makedirs(f'../../_data/GoG/{chain}', exist_ok=True)
+    os.makedirs(f'../../_data/GoG/{chain}/graphs', exist_ok=True)
     labels_final.to_csv(f'../../_data/GoG/{chain}/labels_split.csv', index=False)
     print(f"Labels saved with splits: train={len(train_labels)}, val={len(val_labels)}, test={len(test_labels)}")
 

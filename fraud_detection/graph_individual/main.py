@@ -130,7 +130,7 @@ def main():
     args = get_args()
     chain = str(args.chain)
 
-    dataset_generator = GraphDatasetGenerator(f'../../../_data/dataset/features/{chain}_basic_metrics_processed.csv')
+    dataset_generator = GraphDatasetGenerator(f'../../_data/dataset/features/{chain}_basic_metrics_processed.csv')
     data_list = dataset_generator.get_pyg_data_list()
 
     # x = torch.cat([data.x for data in data_list], dim=0).numpy()

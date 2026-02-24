@@ -310,10 +310,11 @@ Examples:
         df_res = df_res[cols]
 
         # 출력 파일명에 모드 표시
-        mode_suffix = "_fast" if args.skip_diameter else f"_maxd{args.max_diameter_nodes}"
+        # mode_suffix = "_fast" if args.skip_diameter else f"_maxd{args.max_diameter_nodes}"
         output_path = os.path.join(
             args.output_dir, 
-            f'{args.chain}_basic_metrics{mode_suffix}.csv'
+            # f'{args.chain}_basic_metrics{mode_suffix}.csv'
+            f'{args.chain}_basic_metrics.csv'
         )
         df_res.to_csv(output_path, index=False)
         

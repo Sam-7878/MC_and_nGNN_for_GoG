@@ -1,7 +1,22 @@
+from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
+import argparse
 
-df = pd.read_csv('../../_data/results/analysis/bsc_snap_metrics_labels.csv')
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chain', type=str, default='polygon')
+    return parser.parse_args()
+
+
+
+args = get_args()
+chain = args.chain
+
+BASE_PATH = Path('../../_data/results/analysis/')
+IMAGE_PATH = Path('../../_data/results/analysis/images/')
+
+df = pd.read_csv(BASE_PATH / f'{chain}_snap_metrics_labels.csv')
 
 # Edge/Node ratio 계산
 df['Edge_Node_Ratio'] = df['Num_Edges'] / df['Num_Nodes']
@@ -45,7 +60,7 @@ axes[1, 1].set_title('Token Type Distribution')
 axes[1, 1].tick_params(axis='x', rotation=45)
 
 plt.tight_layout()
-plt.savefig('bsc_snap_analysis.png', dpi=300)
+plt.savefig(IMAGE_PATH / f'{chain}_snap_analysis.png', dpi=300)
 print("✓ Visualization saved!")
 
 # 통계 출력

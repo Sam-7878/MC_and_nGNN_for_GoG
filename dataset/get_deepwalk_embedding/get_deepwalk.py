@@ -66,7 +66,7 @@ def process_graph(idx, data, embedding_dim, chain, seed):
             
     node_embeddings = np.array(node_embeddings)
     
-    save_dir = f'../../../_data/dataset/Deepwalk/{chain}/'
+    save_dir = f'../../_data/dataset/Deepwalk/{chain}/'
     # 디렉토리 존재 확인은 main에서 하지만, 혹시 모르니
     os.makedirs(save_dir, exist_ok=True)
     
@@ -83,14 +83,14 @@ def main():
     args = parameter_parser()
     seed_everything(args.seed) # 메인 프로세스 시드 고정
     
-    graphs_directory = f"../../../_data/GoG/{args.chain}/"
+    graphs_directory = f"../../_data/GoG/{args.chain}/"
 
     dataset_generator = GraphDatasetGenerator(graphs_directory)
     data_list = dataset_generator.get_pyg_data_list()
     embedding_dim = args.embedding_dim
     chain = args.chain
 
-    output_dir = f'../../../_data/dataset/Deepwalk/{chain}/'
+    output_dir = f'../../_data/dataset/Deepwalk/{chain}/'
     os.makedirs(output_dir, exist_ok=True)
 
     # 이미 처리된 파일이 있는지 확인 로직을 추가하면 중단 후 재실행 시 유용함

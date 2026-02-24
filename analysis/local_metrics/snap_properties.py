@@ -261,6 +261,7 @@ Examples:
     output_file = os.path.join(
         output_dir, 
         f'{args.chain}_snap_metrics_labels.csv'
+        # f'{args.chain}_advanced_metrics_labels.csv'
     )
     checkpoint_file = output_file.replace('.csv', '_checkpoint.csv')
     

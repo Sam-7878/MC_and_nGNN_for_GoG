@@ -2,7 +2,6 @@ import torch
 import numpy as np
 from torch_geometric.data import Data
 from utils import hierarchical_graph_reader
-from param_parser import parameter_parser
 from pygod.detector import DOMINANT, DONE, GAE, AnomalyDAE, CoLA
 from pygod.metric import eval_roc_auc
 from sklearn.metrics import average_precision_score, roc_auc_score
@@ -97,7 +96,7 @@ def get_args():
 
 
 def main():
-    args = parameter_parser()
+    args = get_args()
     chain = args.chain
     
     filepath = f'../../_data/dataset/features/{chain}_basic_metrics_processed.csv'

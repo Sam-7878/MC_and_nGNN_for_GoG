@@ -158,7 +158,7 @@ print(f"Common_Nodes sample (for centrality): {global_graph.es['common_nodes'][:
 
 
 # Tx counts (병렬 처리)
-cache_file = f'../../_data/transactions/{chain}_tx_counts.pkl'
+cache_file = f'../../_data/caches/{chain}_tx_counts.pkl'
 chain_dir = f'../../_data/dataset/transactions/{chain}'
 
 def count_tx(addr, chain_dir):
@@ -270,10 +270,10 @@ plt.scatter(unweighted_degree, weighted_degree_common, alpha=0.5)  # ✅ common_
 plt.xlabel('Unweighted Degree')
 plt.ylabel('Weighted Degree (Common Nodes)')
 plt.title(f'{chain.upper()}: Degree Centrality')
-os.makedirs('../../_data/results/analysis', exist_ok=True)
-plt.savefig(f'../../_data/results/analysis/{chain}_degree_scatter.png', dpi=300, bbox_inches='tight')
+os.makedirs('../../_data/results/analysis/images', exist_ok=True)
+plt.savefig(f'../../_data/results/analysis/images/{chain}_degree_scatter.png', dpi=300, bbox_inches='tight')
 plt.close()
-print(f"Plot saved: ../../_data/results/analysis/{chain}_degree_scatter.png")
+print(f"Plot saved: ../../_data/results/analysis/images/{chain}_degree_scatter.png")
 
 
 
@@ -284,9 +284,9 @@ plt.hist(edge_weights_common, bins=50, edgecolor='black', alpha=0.7)
 plt.xlabel('Common Nodes (Edge Weight)')
 plt.ylabel('Frequency')
 plt.title(f'{chain.upper()}: Edge Weights Distribution')
-plt.savefig(f'../../_data/results/analysis/{chain}_edge_weights.png', dpi=300, bbox_inches='tight')
+plt.savefig(f'../../_data/results/analysis/images/{chain}_edge_weights.png', dpi=300, bbox_inches='tight')
 plt.close()
-print(f"Plot saved: ../../_data/results/analysis/{chain}_edge_weights.png")
+print(f"Plot saved: ../../_data/results/analysis/images/{chain}_edge_weights.png")
 
 
 
