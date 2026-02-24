@@ -1,268 +1,298 @@
-# ngnn/hierarchical_dataset.py (수정판)
+#!/usr/bin/env python3
+"""
+Hierarchical Dataset for Graph-of-Graphs
+Combines local transaction graphs with global contract graph
+"""
 
 import torch
-import torch.nn.functional as F
-from torch_geometric.data import Dataset, Data
-from torch_geometric.loader import DataLoader
+import numpy as np
 from pathlib import Path
-import json
-
-
-class HierarchicalDataset(Dataset):
-    """Hierarchical Dataset for Contract-level and Transaction-level Graphs"""
-
-    def __init__(self, data_dir, contract_graph_path, split='train'):
-        super().__init__()
-        
-        self.data_dir = Path(data_dir)
-        self.split = split
-            
-        # Load contract graph
-        print(f"📥 Loading contract graph from {contract_graph_path}")
-        contract_data = torch.load(contract_graph_path, weights_only=False)
-        
-        print(f"📦 Available keys: {list(contract_data.keys())}")
-        
-        self.contract_edge_index = contract_data['edge_index']
-        self.contract_to_idx = contract_data['contract_to_idx']
-        self.idx_to_contract = contract_data['idx_to_contract']
-        
-        # 🔧 FIX: embeddings와 labels가 없으면 나중에 계산
-        self.contract_features = contract_data.get('embeddings', None)
-        self.labels = contract_data.get('labels', None)
-        
-        num_contracts = contract_data.get('num_nodes', len(self.idx_to_contract))
-        
-        print(f"✅ Contract graph loaded:")
-        print(f"   Nodes: {num_contracts}")
-        print(f"   Edges: {self.contract_edge_index.shape[1]}")
-        
-        # Load local graphs
-        print(f"\n📥 Loading local transaction graphs...")
-        self.local_graphs = []
-        
-        graph_files = sorted(self.data_dir.glob("*.json"))
-        
-        # 🔧 labels를 여기서 수집
-        collected_labels = []
-        
-        for idx, file in enumerate(graph_files):
-            if idx >= num_contracts:
-                break
-                
-            with open(file, 'r') as f:
-                data = json.load(f)
-            
-            # Convert to PyG Data
-            edges = data.get('edges', [])
-            if len(edges) == 0:
-                continue
-            
-            edge_index = torch.tensor(edges, dtype=torch.long).t()
-            
-            # Node features
-            num_nodes = data.get('num_nodes', edge_index.max().item() + 1)
-            
-            # Degree as features
-            degree = torch.zeros(num_nodes, 1)
-            for src, dst in edge_index.t().tolist():
-                degree[src] += 1
-                degree[dst] += 1
-            x = degree
-            
-            # Edge features
-            num_edges = edge_index.size(1)
-            edge_attr = torch.ones(num_edges, 1)
-            
-            # 🔧 Label 수집 (JSON에서)
-            label = data.get('label', 0)
-            collected_labels.append(label)
-            
-            graph_data = Data(
-                x=x,
-                edge_index=edge_index,
-                edge_attr=edge_attr,
-                num_nodes=num_nodes,
-                contract_id=idx,
-                y=label
-            )
-            
-            self.local_graphs.append(graph_data)
-        
-        # 🔧 labels가 저장되지 않았으면 수집한 것 사용
-        if self.labels is None:
-            self.labels = torch.tensor(collected_labels, dtype=torch.long)
-            print(f"✅ Collected labels from JSON files")
-        
-        # 🔧 embeddings가 없으면 나중에 학습 가능하도록 None으로 유지
-        if self.contract_features is None:
-            print(f"⚠️  No pre-computed embeddings, will be learned during training")
-            # 초기 임베딩 생성 (랜덤 또는 degree 기반)
-            self.contract_features = torch.randn(len(self.local_graphs), 8)
-        
-        print(f"✅ Loaded {len(self.local_graphs)} local graphs")
-        
-        # Label distribution
-        label_counts = torch.bincount(self.labels)
-        print(f"\n📊 Label distribution:")
-        for i, count in enumerate(label_counts):
-            print(f"   Label {i}: {count.item()} contracts")
-        
-        # Split indices
-        # [수정 전] 에러 발생 원인
-        # self.indices = [i for i, label in enumerate(labels) if ...] 
-        
-        # [수정 후] 변수명 변경 (indices -> split_indices)
-        all_indices = range(label_counts.size(0))
-        
-        # Split 로직 (예시)
-        # 실제 구현하신 split 로직에 맞춰 변수명만 바꾸면 됩니다.
-        if split == 'train':
-            # 예: 70% 학습
-            self.split_indices = [i for i in all_indices if (i % 10) < 7]
-        elif split == 'val':
-             self.split_indices = [i for i in all_indices if 7 <= (i % 10) < 8]
-        elif split == 'test':
-             self.split_indices = [i for i in all_indices if (i % 10) >= 8]
-        else:
-            self.split_indices = list(all_indices)
-
-        print(f"✅ Split '{split}': {len(self.split_indices)} samples")
-
-    
-    def _get_split_indices(self):
-        """Split dataset (70/15/15)"""
-        n = len(self.local_graphs)
-        indices = torch.randperm(n)
-        
-        train_size = int(0.7 * n)
-        val_size = int(0.15 * n)
-        
-        if self.split == 'train':
-            return indices[:train_size].tolist()
-        elif self.split == 'val':
-            return indices[train_size:train_size+val_size].tolist()
-        else:  # test
-            return indices[train_size+val_size:].tolist()
-    
-        
-    
-    def len(self):
-        # [수정 전] return len(self.indices)
-        # [수정 후]
-        return len(self.split_indices)
-    
-    def get(self, idx):
-        # [수정 전] real_idx = self.indices[idx]
-        # [수정 후] 매핑된 실제 인덱스 가져오기
-        real_idx = self.split_indices[idx]
-        return self.local_graphs[real_idx]
-    
-    def get_global_graph(self):
-        """Get contract-level graph"""
-        return {
-            'edge_index': self.contract_edge_index,
-            'features': self.contract_features,
-            'labels': self.labels
-        }
-    
-    def get_num_contracts(self):
-        """Total number of contracts"""
-        return len(self.local_graphs)
-
-
-class HierarchicalBatchSampler:
-    """커스텀 배치 샘플러"""
-    def __init__(self, dataset, batch_size, shuffle=True):
-        self.dataset = dataset
-        self.batch_size = batch_size
-        self.shuffle = shuffle
-        
-    def __iter__(self):
-        indices = list(range(len(self.dataset)))
-        if self.shuffle:
-            import random
-            random.shuffle(indices)
-        
-        for i in range(0, len(indices), self.batch_size):
-            batch_indices = indices[i:i+self.batch_size]
-            yield batch_indices
-    
-    def __len__(self):
-        return (len(self.dataset) + self.batch_size - 1) // self.batch_size
+from torch.utils.data import Dataset, DataLoader
+from torch_geometric.data import Data, Batch
+import argparse
 
 
 def hierarchical_collate_fn(batch_list):
     """
-    Custom collate function
+    Custom collate function for hierarchical GNN
+    
+    Args:
+        batch_list: List of samples from HierarchicalDataset
+        
+    Returns:
+        Dictionary containing batched data
     """
-    from torch_geometric.data import Batch
+    # Local graphs 배치화
+    local_graphs = [sample['local_graph'] for sample in batch_list]
+    local_batch = Batch.from_data_list(local_graphs)
     
-    # Batch local graphs
-    local_batch = Batch.from_data_list(batch_list)
+    # Contract IDs
+    contract_ids = torch.tensor([sample['contract_id'] for sample in batch_list], 
+                                 dtype=torch.long)
     
-    # Extract info
-    contract_ids = torch.tensor([data.contract_id for data in batch_list])
-    labels = torch.tensor([data.y for data in batch_list])
+    # Labels
+    labels = torch.tensor([sample['label'] for sample in batch_list], 
+                          dtype=torch.long)
+    
+    # Global graph (모든 샘플이 동일한 global graph 공유)
+    global_graph = batch_list[0]['global_graph']
     
     return {
         'local_batch': local_batch,
         'contract_ids': contract_ids,
-        'labels': labels
+        'labels': labels,
+        'global_edge_index': global_graph['edge_index'],
+        'global_features': global_graph['features'],
+        'global_labels': global_graph['labels']
     }
 
 
-# Test
-if __name__ == "__main__":
+class HierarchicalDataset(Dataset):
+    """
+    Dataset for hierarchical GNN on cryptocurrency graphs
+    
+    Each sample contains:
+    - local_graph: Transaction-level graph for one contract
+    - global_graph: Contract-level graph (shared across all samples)
+    - contract_id: Index of the contract
+    - label: Contract label
+    """
+    
+    def __init__(self, data_dir, contract_graph_path, split='train', 
+                 train_ratio=0.6, val_ratio=0.2):
+        """
+        Args:
+            data_dir: Directory containing local graph .pt files
+            contract_graph_path: Path to contract-level graph
+            split: 'train', 'val', or 'test'
+            train_ratio: Ratio for training set
+            val_ratio: Ratio for validation set
+        """
+        super().__init__()
+        
+        self.data_dir = Path(data_dir)
+        self.split = split
+        
+        print(f"📂 data_dir: {self.data_dir}")
+        print(f"📂 data_dir exists: {self.data_dir.exists()}")
+        print(f"📂 data_dir is directory: {self.data_dir.is_dir()}")
+        
+        # Load contract graph
+        self._load_contract_graph(contract_graph_path)
+        
+        # Load local graphs
+        self._load_local_graphs()
+        
+        # Create train/val/test splits
+        self._create_splits(train_ratio, val_ratio)
+        
+        print(f"✅ Split '{split}': {len(self.contract_ids)} samples")
+    
+    def _load_contract_graph(self, contract_graph_path):
+        """Load global contract-level graph"""
+        print(f"📥 Loading contract graph from {contract_graph_path}")
+        
+        contract_data = torch.load(contract_graph_path, weights_only=False)
+        
+        print(f"📦 Available keys: {list(contract_data.keys())}")
+        
+        # Extract data
+        self.global_edge_index = contract_data['edge_index']
+        self.global_features = contract_data.get('embeddings', 
+                                                  torch.randn(contract_data['num_nodes'], 128))
+        self.global_labels = contract_data['labels']
+        self.num_contracts = contract_data['num_nodes']
+        
+        # Mappings
+        self.contract_to_idx = contract_data['contract_to_idx']
+        self.idx_to_contract = contract_data['idx_to_contract']
+        
+        print(f"✅ Contract graph loaded:")
+        print(f"   Nodes: {self.num_contracts}")
+        print(f"   Edges: {self.global_edge_index.shape[1]}")
+    
+    def _load_local_graphs(self):
+        """Load local transaction graphs"""
+        print(f"\n📥 Loading local transaction graphs from {self.data_dir}...")
+        
+        self.local_graphs = {}
+        
+        if not self.data_dir.exists():
+            print(f"❌ Directory does not exist: {self.data_dir}")
+            return
+        
+        # Find all .pt files
+        all_files = list(self.data_dir.glob("*.pt"))
+        print(f"📁 Found {len(all_files)} .pt files in directory")
+        
+        # Show sample files
+        for i, f in enumerate(all_files[:5]):
+            print(f"   - {f.name}")
+        if len(all_files) > 5:
+            print(f"   ... and {len(all_files) - 5} more")
+        
+        # Load graphs
+        loaded_count = 0
+        for contract_id in range(self.num_contracts):
+            local_graph_path = self.data_dir / f"{contract_id}.pt"
+            
+            if local_graph_path.exists():
+                try:
+                    self.local_graphs[contract_id] = torch.load(
+                        local_graph_path, 
+                        weights_only=False
+                    )
+                    loaded_count += 1
+                except Exception as e:
+                    print(f"⚠️ Error loading {local_graph_path}: {e}")
+        
+        print(f"✅ Loaded {loaded_count} local graphs out of {self.num_contracts} contracts")
+    
+    def _create_splits(self, train_ratio, val_ratio):
+        """Create train/val/test splits"""
+        
+        # Get all contract IDs
+        all_contract_ids = list(range(self.num_contracts))
+        
+        # Shuffle
+        np.random.seed(42)
+        np.random.shuffle(all_contract_ids)
+        
+        # Split
+        n_train = int(len(all_contract_ids) * train_ratio)
+        n_val = int(len(all_contract_ids) * val_ratio)
+        
+        train_ids = all_contract_ids[:n_train]
+        val_ids = all_contract_ids[n_train:n_train + n_val]
+        test_ids = all_contract_ids[n_train + n_val:]
+        
+        # Print label distribution
+        print(f"\n📊 Label distribution:")
+        unique_labels, counts = torch.unique(self.global_labels, return_counts=True)
+        for label, count in zip(unique_labels.tolist(), counts.tolist()):
+            print(f"   Label {label}: {count} contracts")
+        
+        # Select IDs based on split
+        if self.split == 'train':
+            self.contract_ids = train_ids
+        elif self.split == 'val':
+            self.contract_ids = val_ids
+        else:  # test
+            self.contract_ids = test_ids
+    
+    def __len__(self):
+        """Return number of samples in this split"""
+        return len(self.contract_ids)
+    
+    def __getitem__(self, idx):
+        """
+        Get a single sample
+        
+        Args:
+            idx: Index within the split (0 to len(self)-1)
+            
+        Returns:
+            Dictionary containing local graph, global graph info, and labels
+        """
+        # Get actual contract ID
+        contract_id = self.contract_ids[idx]
+        
+        # Get local graph (transaction-level)
+        local_graph = self.local_graphs.get(contract_id)
+        
+        # If no local graph, create empty one
+        if local_graph is None:
+            local_graph = Data(
+                x=torch.zeros((1, 1)),
+                edge_index=torch.empty((2, 0), dtype=torch.long),
+                edge_attr=torch.empty((0, 1)),
+                num_nodes=1
+            )
+        
+        # Get label
+        label = self.global_labels[contract_id].item()
+        
+        # Prepare global graph info
+        global_graph = {
+            'edge_index': self.global_edge_index,
+            'features': self.global_features,
+            'labels': self.global_labels
+        }
+        
+        return {
+            'local_graph': local_graph,
+            'global_graph': global_graph,
+            'contract_id': contract_id,
+            'label': label
+        }
+
+
+# ============================================================
+# Test Code
+# ============================================================
+
+def test_dataset(chain='polygon'):
+    """Test the HierarchicalDataset"""
+    
     print("="*60)
-    print("🧪 Testing HierarchicalDataset")
+    print("🧪 Testing HierarchicalDataset with Custom Collate")
     print("="*60)
     
-    # Load dataset
+    # Paths
+    data_dir = f"../../_data/GoG/{chain}/local_graphs"
+    contract_graph_path = f"../../_data/GoG/{chain}/{chain}_hybrid.pt"
+    
+    # Create dataset
     dataset = HierarchicalDataset(
-        data_dir="../../_data/GoG/polygon",
-        contract_graph_path="../../_data/GoG/polygon/polygon_hybrid.pt",
-        split='train'
+        data_dir=data_dir,
+        contract_graph_path=contract_graph_path,
+        split='train',
+        train_ratio=0.6,
+        val_ratio=0.2
     )
     
     print(f"\n📊 Dataset Info:")
     print(f"  Total samples: {len(dataset)}")
     
-    # Sample data
+    # Test single sample
+    print(f"\n🔍 Testing single sample...")
     sample = dataset[0]
-    print(f"\n📌 Sample data:")
-    print(f"  Nodes: {sample.num_nodes}")
-    print(f"  Edges: {sample.edge_index.shape[1]}")
-    print(f"  Node features: {sample.x.shape}")
-    print(f"  Edge features: {sample.edge_attr.shape}")
-    print(f"  Contract ID: {sample.contract_id}")
-    print(f"  Label: {sample.y}")
     
-    # Global graph
-    global_graph = dataset.get_global_graph()
-    print(f"\n🌐 Global graph:")
-    print(f"  Edges: {global_graph['edge_index'].shape}")
-    if global_graph['features'] is not None:
-        print(f"  Features: {global_graph['features'].shape}")
-    if global_graph['labels'] is not None:
-        print(f"  Labels: {global_graph['labels'].shape}")
+    print(f"  Local graph nodes: {sample['local_graph'].num_nodes}")
+    print(f"  Local graph edges: {sample['local_graph'].edge_index.shape[1]}")
+    print(f"  Contract ID: {sample['contract_id']}")
+    print(f"  Label: {sample['label']}")
     
     # Test DataLoader
     print(f"\n📦 Testing DataLoader...")
-    loader = DataLoader(
+    dataloader = DataLoader(
         dataset,
         batch_size=4,
         shuffle=True,
         collate_fn=hierarchical_collate_fn
     )
-   
-    batch = next(iter(loader))
-    print(f"\n📋 Batch Info:")
-    print(f"  Batch size: {len(batch['contract_ids'])}")
-    print(f"  Local batch nodes: {batch['local_batch'].num_nodes}")
-    print(f"  Local batch edges: {batch['local_batch'].num_edges}")
-    print(f"  Contract IDs: {batch['contract_ids']}")
-    print(f"  Labels: {batch['labels']}")
     
-    print(f"\n✅ All tests passed!")
+    for batch_idx, batch in enumerate(dataloader):
+        print(f"\n  Batch {batch_idx}:")
+        print(f"    Local batch nodes: {batch['local_batch'].num_nodes}")
+        print(f"    Local batch edges: {batch['local_batch'].edge_index.shape[1]}")
+        print(f"    Contract IDs: {batch['contract_ids']}")
+        print(f"    Labels: {batch['labels']}")
+        print(f"    Global graph nodes: {batch['global_features'].shape[0]}")
+        print(f"    Global graph edges: {batch['global_edge_index'].shape[1]}")
+        
+        if batch_idx >= 2:  # Only test first 3 batches
+            break
+    
+    print("\n" + "="*60)
+    print("✅ All tests passed!")
+    print("="*60)
 
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chain', type=str, default='polygon', 
+                        help='Blockchain name (polygon, ethereum, etc.)')
+    args = parser.parse_args()
+    
+    test_dataset(chain=args.chain)

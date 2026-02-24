@@ -137,42 +137,83 @@ class HierarchicalGNN(nn.Module):
             nn.Linear(hidden_dim // 2, num_classes)
         )
     
-    def forward(self, local_batch, contract_edge_index, contract_ids):
+
+
+    def forward(self, batch):
         """
         Args:
-            local_batch: PyG Batch of transaction graphs
-            contract_edge_index: [2, E] global edges
-            contract_ids: [B] contract IDs in this batch
-        
-        Returns:
-            logits: [B, num_classes]
+            batch: Dictionary from hierarchical_collate_fn
         """
-        # Step 1: Local GNN
-        tx_embeddings = self.local_gnn(
-            x=local_batch.x,
-            edge_index=local_batch.edge_index,
-            edge_attr=local_batch.edge_attr,
-            batch=local_batch.batch
+        # Local GNN
+        local_batch = batch['local_batch']
+        local_embeddings = self.local_gnn(
+            local_batch.x, 
+            local_batch.edge_index, 
+            local_batch.edge_attr
         )
         
-        # Step 2: Pooling
-        contract_embeddings = self.pooling(tx_embeddings, local_batch.batch)
+        # Pooling to get contract-level embeddings
+        contract_embeddings = global_mean_pool(
+            local_embeddings, 
+            local_batch.batch
+        )
         
-        # Step 3: Global GNN (optional)
-        if self.use_global_gnn:
-            # Build subgraph for this batch
-            # (In practice, use full contract graph but extract batch contracts)
-            global_embeddings = self.global_gnn(
-                contract_embeddings,
-                contract_edge_index
-            )
-        else:
-            global_embeddings = contract_embeddings
+        # Global GNN
+        global_edge_index = batch['global_edge_index']
+        global_features = batch['global_features']
+        contract_ids = batch['contract_ids']
         
-        # Step 4: Classification
-        logits = self.classifier(global_embeddings)
+        # Combine local and global features
+        enhanced_features = torch.cat([
+            contract_embeddings,
+            global_features[contract_ids]
+        ], dim=1)
         
-        return logits
+        # Final prediction
+        output = self.global_gnn(
+            enhanced_features,
+            global_edge_index
+        )
+        
+        return output[contract_ids]
+
+
+    # def forward(self, local_batch, contract_edge_index, contract_ids):
+    #     """
+    #     Args:
+    #         local_batch: PyG Batch of transaction graphs
+    #         contract_edge_index: [2, E] global edges
+    #         contract_ids: [B] contract IDs in this batch
+        
+    #     Returns:
+    #         logits: [B, num_classes]
+    #     """
+    #     # Step 1: Local GNN
+    #     tx_embeddings = self.local_gnn(
+    #         x=local_batch.x,
+    #         edge_index=local_batch.edge_index,
+    #         edge_attr=local_batch.edge_attr,
+    #         batch=local_batch.batch
+    #     )
+        
+    #     # Step 2: Pooling
+    #     contract_embeddings = self.pooling(tx_embeddings, local_batch.batch)
+        
+    #     # Step 3: Global GNN (optional)
+    #     if self.use_global_gnn:
+    #         # Build subgraph for this batch
+    #         # (In practice, use full contract graph but extract batch contracts)
+    #         global_embeddings = self.global_gnn(
+    #             contract_embeddings,
+    #             contract_edge_index
+    #         )
+    #     else:
+    #         global_embeddings = contract_embeddings
+        
+    #     # Step 4: Classification
+    #     logits = self.classifier(global_embeddings)
+        
+    #     return logits
     
     def forward_with_mcdropout(self, *args, n_samples=10, **kwargs):
         """MC-Dropout for uncertainty"""
