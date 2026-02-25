@@ -1,4 +1,3 @@
-from dataset.get_deepwalk_embedding.get_deepwalk import parameter_parser
 import torch
 import numpy as np
 import random
@@ -74,12 +73,13 @@ import argparse
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--chain', type=str, default='polygon')
+    parser.add_argument('--device', type=str, default=0, help='GPU device index (e.g., 0, 1) or -1 for CPU')
     return parser.parse_args()
 
 
 from torch_geometric.data import Data
-from pygod.detector import DOMINANT, DONE, GAE, AnomalyDAE, CoLA
 from torch_geometric.utils import coalesce
+from pygod.detector import DOMINANT, DONE, GAE, AnomalyDAE, CoLA
 
 def main():
     args = get_args()

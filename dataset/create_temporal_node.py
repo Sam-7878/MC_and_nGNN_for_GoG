@@ -52,7 +52,7 @@ def main():
     train_index = list(timestamps['addr_index'].values)[:train_num]
     test_index = list(timestamps['addr_index'].values)[train_num:]
 
-    NODES_PATH = f'../../_data/GoG/{chain}/nodes'
+    NODES_PATH = f'../../_data/GoG/nodes/{chain}'
     os.makedirs(os.path.dirname(NODES_PATH), exist_ok=True)
 
     file_name = f'{NODES_PATH}/{chain}_train_index_{n}.txt'
