@@ -1,3 +1,5 @@
+from itertools import chain
+
 import pandas as pd
 import json
 import random
@@ -50,12 +52,15 @@ def main():
     train_index = list(timestamps['addr_index'].values)[:train_num]
     test_index = list(timestamps['addr_index'].values)[train_num:]
 
-    file_name = f'../../_data/GoG/node/{chain}_train_index_{n}.txt'
+    NODES_PATH = f'../../_data/GoG/{chain}/nodes'
+    os.makedirs(os.path.dirname(NODES_PATH), exist_ok=True)
+
+    file_name = f'{NODES_PATH}/{chain}_train_index_{n}.txt'
     with open(file_name, 'w') as file:
         for item in train_index:
             file.write(f"{item}\n")
 
-    file_name = f'../../_data/GoG/node/{chain}_test_index_{n}.txt'
+    file_name = f'{NODES_PATH}/{chain}_test_index_{n}.txt'
     with open(file_name, 'w') as file:
         for item in test_index:
             file.write(f"{item}\n")

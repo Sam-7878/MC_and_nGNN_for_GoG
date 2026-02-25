@@ -188,7 +188,7 @@ def main():
     n_workers = args.parallel_workers if args.parallel_workers > 0 else os.cpu_count()
     contracts = labels_final['Contract'].values
     Parallel(n_jobs=n_workers)(
-        delayed(process_single_tx)(contract, chain_dir, labels_final, all_address_index, directory)
+        delayed(process_single_tx)(contract, chain_dir, labels_final, all_address_index, f'{directory}/graphs')
         for contract in tqdm(contracts, desc="Processing tx graphs")
     )
     print("All graphs processed!")

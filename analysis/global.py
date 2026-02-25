@@ -158,7 +158,7 @@ print(f"Common_Nodes sample (for centrality): {global_graph.es['common_nodes'][:
 
 
 # Tx counts (병렬 처리)
-cache_file = f'../../_data/dataset/caches/{chain}_tx_counts.pkl'
+cache_file = f'../../_data/dataset/.cache/{chain}_tx_counts.pkl'
 chain_dir = f'../../_data/dataset/transactions/{chain}'
 
 def count_tx(addr, chain_dir):
