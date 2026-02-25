@@ -8,6 +8,9 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 import os
 import pandas as pd
 import random
+import warnings
+
+warnings.filterwarnings("ignore", message=".*pyg-lib.*")
 
 def create_masks(num_nodes):
     indices = np.arange(num_nodes)
@@ -91,6 +94,7 @@ import argparse
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--chain', type=str, default='polygon')
+    parser.add_argument('--gpu', type=int, default=0, help='GPU index to use')
     return parser.parse_args()
 
 
@@ -146,7 +150,7 @@ def main():
     best_model_params = {}
     for model_name, param_list in model_params.items():
         for param in param_list:
-            detector = eval(f"{model_name}(hid_dim=param['hid_dim'], num_layers=2, epoch=param['epoch'], lr=param['lr'], gpu=args.device)")
+            detector = eval(f"{model_name}(hid_dim=param['hid_dim'], num_layers=2, epoch=param['epoch'], lr=param['lr'], gpu=args.gpu)")
             avg_auc, std_auc, avg_ap, std_ap = run_model(detector, global_data, [seed_for_param_selection])
             if model_name not in best_model_params or avg_auc > best_model_params[model_name].get('Best AUC', 0):
                 best_model_params[model_name] = {
@@ -161,7 +165,7 @@ def main():
     seeds_for_evaluation = [42, 43, 44]
     for model_name, stats in best_model_params.items():
         param = stats['Params']
-        detector = eval(f"{model_name}(hid_dim=param['hid_dim'], num_layers=2, epoch=param['epoch'], lr=param['lr'], gpu=args.device)")
+        detector = eval(f"{model_name}(hid_dim=param['hid_dim'], num_layers=2, epoch=param['epoch'], lr=param['lr'], gpu=args.gpu)")
         avg_auc, std_auc, avg_ap, std_ap = run_model(detector, global_data, seeds_for_evaluation)
         print(model_name)
         print(stats)

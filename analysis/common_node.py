@@ -84,7 +84,7 @@ def load_all_contract_nodes(data_dir: Path, chain: str, use_cache: bool = True) 
         return {}
         
     contract_nodes = {}
-    max_workers = max(1, os.cpu_count() - 4)  # 시스템에 따라 조정 (예: CPU 코어 수 - 4)
+    max_workers = max(1, os.cpu_count()//2)  
     logger.info(f"Parsing CSV files using {max_workers} CPU cores...")
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:

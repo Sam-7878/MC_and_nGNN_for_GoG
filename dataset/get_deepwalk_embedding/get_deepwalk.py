@@ -10,6 +10,9 @@ import multiprocessing
 import argparse
 import os
 import random
+import warnings
+
+warnings.filterwarnings("ignore", message=".*pyg-lib.*")
 
 logging.basicConfig(level=logging.INFO)
 
@@ -69,55 +72,74 @@ def process_graph(idx, data, embedding_dim, chain, seed, save_dir):
             node_embeddings.append(np.zeros(embedding_dim))
             
     node_embeddings = np.array(node_embeddings)
-    
-    print(f"Saving embeddings for graph {idx} with shape {node_embeddings.shape} to {save_dir}")
-    os.makedirs(save_dir, exist_ok=True)
-    
+       
     np.save(f'{save_dir}/{idx}.npy', node_embeddings)
     
     del G, deepwalk, model, node_embeddings 
     gc.collect()
 
+# 수정 전
+# def worker_process(args):
+#     idx, data, embedding_dim, chain, seed = args
+#     output_dir = f'../../_data/dataset/Deepwalk/{chain}/'
+#     os.makedirs(output_dir, exist_ok=True)
+#     process_graph(idx, data, embedding_dim, chain, seed, output_dir)
+
+# 수정 후
 def worker_process(args):
-    idx, data, embedding_dim, chain, seed = args
-
+    idx, embedding_dim, chain, seed = args
+    
+    # args로 넘기지 않고, Fork된 메모리에서 직접 접근 (Copy-on-Write 활용)
+    global data_list 
+    data = data_list[idx]
+    
     output_dir = f'../../_data/dataset/Deepwalk/{chain}/'
-    os.makedirs(output_dir, exist_ok=True)
-
+    # os.makedirs(output_dir, exist_ok=True)
     process_graph(idx, data, embedding_dim, chain, seed, output_dir)
+
+
+
+
+# PyTorch Tensor 공유로 인한 파일 디스크립터 한계 방지를 위해 파일 최상단에 추가하는 것을 권장합니다.
+import torch
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 def main():
     args = parameter_parser()
-    seed_everything(args.seed) # 메인 프로세스 시드 고정
+    seed_everything(args.seed)
     
     graphs_directory = f"../../_data/GoG/{args.chain}/graphs/"
 
     dataset_generator = GraphDatasetGenerator(graphs_directory)
+    
+    # worker_process에서 참조할 수 있도록 global 선언
+    global data_list
     data_list = dataset_generator.get_pyg_data_list()
     embedding_dim = args.embedding_dim
-    # 이미 처리된 파일이 있는지 확인 로직을 추가하면 중단 후 재실행 시 유용함
-    # 여기서는 원본 로직 유지
 
     numbers = list(range(0, len(data_list)))
-    
-    # CPU 코어 사용 (Gensim 내부 병렬처리와 충돌 방지를 위해 조정 필요할 수 있음)
-    # DeepWalk 내부 workers=1로 했으므로, 여기서 프로세스를 많이 띄워도 됨.
-    num_cores = max(2, os.cpu_count() - 4) 
+    num_cores = max(2, os.cpu_count()//2)  # CPU 코어 수의 절반 사용, 최소 2코어 확보
     logging.info(f'Using {num_cores} cores for multiprocessing.')
 
     pool = multiprocessing.Pool(num_cores)
     
-    # arguments에 seed 추가
-    tasks = [(idx, data, embedding_dim, args.chain, args.seed) for idx, data in enumerate(data_list) if idx in numbers]
+    # 수정 포인트 1: data 객체를 넘기지 않음 (메모리 폭발 방지)
+    tasks = [(idx, embedding_dim, args.chain, args.seed) for idx in numbers]
     
     try:
         print(f"Processing {len(tasks)} graphs with embedding dimension {embedding_dim}...")
-        pool.map(worker_process, tasks)
+        
+        # 수정 포인트 2: map 대신 imap_unordered 사용 + chunksize 1 설정
+        # (결과를 한 번에 묶지 않고 스트리밍 방식으로 처리하여 파이프 과부하 방지)
+        for _ in pool.imap_unordered(worker_process, tasks, chunksize=1):
+            pass 
+            
     except Exception as e:
         logging.error(f"Error during multiprocessing: {str(e)}")
     finally:
         pool.close()
         pool.join()
+
 
 if __name__ == "__main__":
     main()
