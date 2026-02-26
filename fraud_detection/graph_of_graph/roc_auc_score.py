@@ -8,12 +8,11 @@ from torch_geometric.data import Data
 from torch_geometric.utils import coalesce
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 from utils import hierarchical_graph_reader, GraphDatasetGenerator
+import warnings
 
-class Args:
-    def __init__(self):
-        # PyGOD는 gpu 인자를 int로 받습니다: 0,1,2... / CPU는 -1
-        self.device = 0 if torch.cuda.is_available() else -1
-        print(f"Using device: {'GPU' if self.device >= 0 else 'CPU'}")
+warnings.filterwarnings("ignore", message=".*pyg-lib.*")
+warnings.filterwarnings("ignore", message=".*transductive only.*")
+warnings.filterwarnings("ignore", message=".*Backbone and num_layers.*") # ✅ 이 줄 추가
 
 def create_masks(num_nodes):
     indices = np.arange(num_nodes)
@@ -88,6 +87,7 @@ import argparse
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--chain', type=str, default='polygon')
+    parser.add_argument('--gpu', type=int, default=0, help='GPU index to use')
     return parser.parse_args()
 
 def main():
@@ -155,7 +155,7 @@ def main():
             num_layers=2,
             epoch=param["epoch"],
             lr=param["lr"],
-            gpu=args.device,
+            gpu=args.gpu,
         )
 
     seed_for_param_selection = 42
@@ -221,8 +221,10 @@ def main():
 
     # 결과를 DataFrame으로 변환 후 CSV로 저장 (Batch Script 연동 목적)
     results_df = pd.DataFrame(final_results)
-    os.makedirs("results", exist_ok=True)
-    csv_path = f"results/baseline_{chain}_log.csv"
+
+    RESULT_PATH = f"../../_data/results/fraud_detection"
+    os.makedirs(RESULT_PATH, exist_ok=True)
+    csv_path = f"{RESULT_PATH}/baseline_{chain}_log.csv"
     results_df.to_csv(csv_path, index=False)
     print(f"\n✅ 최종 베이스라인 평가 결과가 {csv_path} 에 저장되었습니다.")
 

@@ -11,6 +11,7 @@ import random
 import warnings
 
 warnings.filterwarnings("ignore", message=".*pyg-lib.*")
+warnings.filterwarnings("ignore", message=".*transductive only.*")
 
 def create_masks(num_nodes):
     indices = np.arange(num_nodes)
