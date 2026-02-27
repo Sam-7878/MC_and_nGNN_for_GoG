@@ -1,8 +1,5 @@
-from itertools import chain
-
 import numpy as np
 import gc  
-from utils import GraphDatasetGenerator
 from deepwalk import DeepWalk
 import networkx as nx
 import logging
@@ -11,6 +8,9 @@ import argparse
 import os
 import random
 import warnings
+import json
+from pathlib import Path
+from tqdm import tqdm
 
 warnings.filterwarnings("ignore", message=".*pyg-lib.*")
 
@@ -24,32 +24,30 @@ def seed_everything(seed=42):
 def parameter_parser():
     parser = argparse.ArgumentParser(description="Run DeepWalk model for graph embeddings.")
     parser.add_argument('--embedding_dim', type=int, default=32, help='Dimension of embeddings.')
-    parser.add_argument('--chain', type=str, default='polygon', help='Blockchain')
+    parser.add_argument('--chain', type=str, default='bsc', help='Blockchain')
     parser.add_argument('--workers', type=int, default=0, help='Number of parallel workers (0 = auto).')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility.')
     return parser.parse_args()
 
-def process_graph(idx, data, embedding_dim, chain, seed, save_dir):
+def process_graph(idx, edges, embedding_dim, seed, save_dir):
     current_seed = seed + idx
     seed_everything(current_seed)
     
     G = nx.Graph()
-    if data.edge_index is not None and data.edge_index.numel() > 0:
-        G.add_edges_from(data.edge_index.t().tolist())
+    if edges:
+        G.add_edges_from(edges)
     
     num_nodes = G.number_of_nodes()
     
     if num_nodes == 0:
         return
 
-    # =====================================================================
-    # ✅ [핵심 추가] 거대 그래프 메모리 폭발 방지 (동적 파라미터 스케일링)
-    # =====================================================================
+    # 거대 그래프 메모리 폭발 방지 (동적 파라미터 스케일링)
     walk_length = 20
     num_walks = 40
     
     if num_nodes > 100000:
-        walk_length = 4
+        walk_length = 5
         num_walks = 2
         logging.warning(f"Graph {idx} is MASSIVE ({num_nodes} nodes). Drastically reducing walks to prevent OOM.")
     elif num_nodes > 30000:
@@ -59,12 +57,7 @@ def process_graph(idx, data, embedding_dim, chain, seed, save_dir):
     elif num_nodes > 10000:
         walk_length = 10
         num_walks = 10
-        logging.info(f"Graph {idx} is large ({num_nodes} nodes). Adjusting walks.")
-    else:
-        logging.info(f'Processing graph {idx} ({num_nodes} nodes, {G.number_of_edges()} edges)')
-
-    print(f"Graph {idx}: num_n={num_nodes}, walk_length={walk_length}, num_walks={num_walks}")
-
+    
     try:
         deepwalk = DeepWalk(G, walk_length=walk_length, num_walks=num_walks, embedding_dim=embedding_dim, seed=current_seed)
         walks = deepwalk.generate_walks()
@@ -85,7 +78,6 @@ def process_graph(idx, data, embedding_dim, chain, seed, save_dir):
         np.save(f'{save_dir}/{idx}.npy', node_embeddings)
         
     except MemoryError:
-        # 워커가 죽는 것을 막고 0벡터로 저장 후 스킵
         logging.error(f"MemoryError on graph {idx} ({num_nodes} nodes). Saving zero embeddings instead of crashing.")
         node_embeddings = np.zeros((num_nodes, embedding_dim))
         np.save(f'{save_dir}/{idx}.npy', node_embeddings)
@@ -104,56 +96,52 @@ def worker_process(args):
     idx, embedding_dim, chain, seed = args
     output_dir = f'../../_data/dataset/Deepwalk/{chain}/'
     
-    # 이어하기: 이미 생성된 파일은 1초 만에 패스
+    # 1. 이어하기: 이미 생성된 파일은 즉시 패스
     if os.path.exists(f'{output_dir}/{idx}.npy'):
         return
     
-    global data_list 
-    data = data_list[idx]
-    process_graph(idx, data, embedding_dim, chain, seed, output_dir)
-
-
-import torch
-torch.multiprocessing.set_sharing_strategy('file_system')
+    graph_path = f"../../_data/GoG/{chain}/graphs/{idx}.json"
+    if not os.path.exists(graph_path):
+        return
+        
+    # 2. 지연 로딩 (Lazy Loading): 워커가 실행될 때 비로소 JSON을 읽음
+    # 이렇게 하면 메인 프로세스는 메모리를 전혀 쓰지 않음!
+    with open(graph_path, 'r') as f:
+        data = json.load(f)
+        edges = data.get('edges', [])
+        
+    process_graph(idx, edges, embedding_dim, seed, output_dir)
+    
+    # 처리 후 즉시 메모리 해제
+    del data, edges
+    gc.collect()
 
 def main():
     args = parameter_parser()
     seed_everything(args.seed)
     
-    graphs_directory = f"../../_data/GoG/{args.chain}/graphs/"
+    graphs_directory = Path(f"../../_data/GoG/{args.chain}/graphs/")
     output_dir = f'../../_data/dataset/Deepwalk/{args.chain}/'
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"Loading graphs from {graphs_directory}...")
-
-    dataset_generator = GraphDatasetGenerator(graphs_directory)
-
-    print("Generating PyG data list...")
+    # 전체 데이터 개수를 JSON 파일 개수로 파악 (데이터를 메모리에 올리지 않음)
+    json_files = list(graphs_directory.glob("*.json"))
+    numbers = sorted([int(f.stem) for f in json_files])
     
-    global data_list
-    data_list = dataset_generator.get_pyg_data_list()
-    embedding_dim = args.embedding_dim
-
-    data_length = len(data_list)
-    numbers = list(range(0, data_length))
-    print(f"Total graphs to process: {data_length}")
-    
-    # ✅ 사용자가 --workers를 지정하면 그 값을 우선 사용하도록 수정
     if args.workers > 0:
         num_cores = args.workers
     else:
         num_cores = max(2, os.cpu_count() // 2)
         
-    logging.info(f'Using {num_cores} cores for multiprocessing.')
+    logging.info(f'Using {num_cores} cores for multiprocessing (Lazy Loading Mode).')
 
-    # OOM 방지용 청크 초기화 적용
-    pool = multiprocessing.Pool(num_cores, maxtasksperchild=2)
-    tasks = [(idx, embedding_dim, args.chain, args.seed) for idx in numbers]
+    pool = multiprocessing.Pool(num_cores, maxtasksperchild=4)
+    tasks = [(idx, args.embedding_dim, args.chain, args.seed) for idx in numbers]
     
     try:
-        from tqdm import tqdm
-        print(f"Processing {len(tasks)} graphs with embedding dimension {embedding_dim}...")
+        print(f"Processing {len(tasks)} graphs with embedding dimension {args.embedding_dim}...")
         
+        # tqdm 적용
         for _ in tqdm(pool.imap_unordered(worker_process, tasks, chunksize=1), total=len(tasks)):
             pass 
             
@@ -162,7 +150,6 @@ def main():
     finally:
         pool.close()
         pool.join()
-
 
 if __name__ == "__main__":
     main()

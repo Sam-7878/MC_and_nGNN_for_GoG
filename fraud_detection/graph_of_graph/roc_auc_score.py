@@ -7,12 +7,15 @@ from pygod.detector import DOMINANT, DONE, GAE, AnomalyDAE, CoLA
 from torch_geometric.data import Data
 from torch_geometric.utils import coalesce
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
-from utils import hierarchical_graph_reader, GraphDatasetGenerator
+from utils import hierarchical_graph_reader
 import warnings
+import json
+from pathlib import Path
+import argparse
 
 warnings.filterwarnings("ignore", message=".*pyg-lib.*")
 warnings.filterwarnings("ignore", message=".*transductive only.*")
-warnings.filterwarnings("ignore", message=".*Backbone and num_layers.*") # ✅ 이 줄 추가
+warnings.filterwarnings("ignore", message=".*Backbone and num_layers.*") 
 
 def create_masks(num_nodes):
     indices = np.arange(num_nodes)
@@ -42,7 +45,8 @@ def set_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 def run_model(detector, data, seeds, mask=None):
     auc_scores = []
@@ -82,8 +86,6 @@ def run_model(detector, data, seeds, mask=None):
             np.mean(ap_scores), np.std(ap_scores),
             np.mean(f1_scores), np.std(f1_scores))
 
-import argparse
-
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--chain', type=str, default='polygon')
@@ -94,19 +96,33 @@ def main():
     args = get_args()
     chain = args.chain
 
-    dataset_generator = GraphDatasetGenerator(
-        f"../../_data/dataset/features/{chain}_basic_metrics_processed.csv"
-    )
-    data_list = dataset_generator.get_pyg_data_list()
-
-    x = torch.cat([data.x for data in data_list], dim=0)
+    # =========================================================================
+    # ✅ 메모리 최적화: GraphDatasetGenerator 대신 JSON 초경량 파싱 (Lazy Loading) 적용
+    # =========================================================================
+    graphs_dir = Path(f"../../_data/GoG/{chain}/graphs/")
+    num_nodes = len(list(graphs_dir.glob("*.json")))
+    
+    x_list = []
+    y_list = []
+    
+    print(f"Loading features and labels from {num_nodes} JSON files (Lightweight Lazy Mode)...")
+    
+    for idx in range(num_nodes):
+        with open(graphs_dir / f"{idx}.json", 'r') as f:
+            data = json.load(f)
+            # 수많은 로컬 엣지 데이터는 무시하고, Global 노드 피처(contract_feature)와 정답(label)만 추출
+            x_list.append(data.get('contract_feature', []))
+            y_list.append(data.get('label', 0))
+            
+    x = torch.tensor(x_list, dtype=torch.float)
+    y = torch.tensor(y_list, dtype=torch.long)
+    # =========================================================================
 
     hierarchical_graph = hierarchical_graph_reader(
         f"../../_data/GoG/{chain}/edges/global_edges.csv"
     )
 
     edge_index = torch.LongTensor(list(hierarchical_graph.edges)).t().contiguous()
-    num_nodes = x.size(0)
 
     # 모든 노드에 self-loop 추가 (고립 노드 포함)
     self_loops = torch.arange(num_nodes, dtype=torch.long)
@@ -119,7 +135,7 @@ def main():
     global_data = Data(
         x=x,
         edge_index=edge_index,
-        y=dataset_generator.target,
+        y=y,
         num_nodes=num_nodes,
     )
 

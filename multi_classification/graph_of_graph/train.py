@@ -4,20 +4,112 @@ from tqdm import trange
 from seal import SEAL
 from dvgga import DVGGA
 from gognn import NetModular
-from utils import hierarchical_graph_reader, GraphDatasetGenerator
+from utils import hierarchical_graph_reader
 from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, average_precision_score, classification_report
 from collections import Counter
 from sklearn.model_selection import train_test_split
-import random
 import numpy as np
 
+import json
+from pathlib import Path
+from torch_geometric.data import Data
+
+# =========================================================================
+# ✅ 메모리 최적화: GraphDatasetGenerator를 대체하는 초경량 지연 로딩 클래스
+# - 모델이 특정 그래프를 요청할 때만 JSON을 열어 데이터를 읽고 반환 (OOM 원천 차단)
+# - 단, train_test_split시 필요한 label 데이터만 미리 스캔하여 초경량으로 로드
+# =========================================================================
+class LazyGraphDataset:
+    def __init__(self, graphs_dir, device):
+        self.graphs_dir = Path(graphs_dir)
+        self.device = device
+        
+        # 디렉토리 내 JSON 파일 탐색
+        self.json_files = sorted(list(self.graphs_dir.glob("*.json")), key=lambda x: int(x.stem))
+        self.num_graphs = len(self.json_files)
+        
+        self.number_of_features = 0
+        self.number_of_labels = 0
+        
+        # Stratified Split을 위해 라벨(Target)만 미리 가볍게 로딩
+        targets = []
+        if self.num_graphs > 0:
+            print(f"Preloading targets from {self.num_graphs} JSON files for stratification...")
+            for idx in range(self.num_graphs):
+                with open(self.graphs_dir / f"{idx}.json", 'r') as f:
+                    data = json.load(f)
+                    targets.append(data.get('label', 0))
+                    
+                    # 첫 번째 파일에서 특성 차원 파악
+                    if idx == 0:
+                        features = data.get('features', [])
+                        if features and len(features) > 0:
+                            self.number_of_features = len(features[0])
+                        else:
+                            self.number_of_features = len(data.get('contract_feature', []))
+                            
+        self.target = torch.tensor(targets, dtype=torch.long).to(self.device)
+        if self.num_graphs > 0:
+            self.number_of_labels = len(torch.unique(self.target))
+            
+        # 모델에서 dataset_generator.graphs 로 접근할 때 self를 반환
+        self.graphs = self
+        
+    def __len__(self):
+        return self.num_graphs
+
+    def _load_graph(self, idx):
+        # 런타임에 JSON에서 데이터를 On-the-fly로 로딩
+        with open(self.graphs_dir / f"{idx}.json", 'r') as f:
+            data = json.load(f)
+            
+        contract_feature = data.get('contract_feature', [])
+        label = data.get('label', 0)
+        edges = data.get('edges', [])
+        features = data.get('features', [])
+        
+        y = torch.tensor([label], dtype=torch.long).to(self.device)
+        
+        if features:
+            x = torch.tensor(features, dtype=torch.float).to(self.device)
+        else:
+            x = torch.tensor([contract_feature], dtype=torch.float).to(self.device)
+            
+        if edges:
+            edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous().to(self.device)
+        else:
+            edge_index = torch.empty((2, 0), dtype=torch.long).to(self.device)
+            
+        pyg_data = Data(x=x, edge_index=edge_index, y=y)
+        pyg_data.contract_feature = torch.tensor([contract_feature], dtype=torch.float).to(self.device)
+        
+        return pyg_data
+
+    def __getitem__(self, idx):
+        # 모델 내부에서 slicing, list, tensor 등 다양한 형태로 접근할 경우를 완벽 지원
+        if isinstance(idx, slice):
+            start = idx.start or 0
+            stop = idx.stop or self.num_graphs
+            step = idx.step or 1
+            return [self._load_graph(i) for i in range(start, stop, step)]
+        elif torch.is_tensor(idx) and idx.dtype == torch.bool:
+            indices = idx.nonzero(as_tuple=False).view(-1).tolist()
+            return [self._load_graph(i) for i in indices]
+        elif hasattr(idx, '__iter__') and not isinstance(idx, str):
+            return [self._load_graph(int(i)) for i in idx]
+        else:
+            return self._load_graph(int(idx))
+# =========================================================================
 
 class SEALCITrainer(object):
     def __init__(self, args, seed):
         self.args = args
         self.seed = seed
         self.macro_graph = hierarchical_graph_reader(self.args.hierarchical_graph)
-        self.dataset_generator = GraphDatasetGenerator(self.args.graphs, self.args.device)
+        
+        # ✅ 무거운 GraphDatasetGenerator 대신 LazyGraphDataset 적용
+        self.dataset_generator = LazyGraphDataset(self.args.graphs, self.args.device)
+        
         self._setup_macro_graph()
         if self.args.split_type == 'random':
             self._create_split()  
@@ -46,7 +138,6 @@ class SEALCITrainer(object):
         with open(path, 'r') as file:
             lines = file.readlines()
         return [int(line.strip()) for line in lines]
-
 
     def _setup_macro_graph(self):
         """
@@ -91,7 +182,8 @@ class SEALCITrainer(object):
 
 
     def calculate_average_graph_size(self, indices):
-        total_nodes = sum(len(self.dataset_generator.graphs[index]["features"]) for index in indices)
+        # ✅ Dictionary 접근("features") 대신 PyG Data 객체의 .x 속성을 사용하여 노드 수를 구하도록 수정
+        total_nodes = sum(self.dataset_generator.graphs[index].x.size(0) for index in indices)
         return total_nodes / len(indices)
 
     def print_average_sizes(self, train_indices, test_indices):
