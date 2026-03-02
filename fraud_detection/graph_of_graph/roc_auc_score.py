@@ -10,8 +10,24 @@ from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 from utils import hierarchical_graph_reader
 import warnings
 import json
+import gc  # 가비지 컬렉터 추가
 from pathlib import Path
 import argparse
+from datetime import datetime
+
+# 메모리 단편화 최소화 (PyTorch 1.12.0 이상 지원)
+# os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+# Windows WSL2 환경에서는 그래픽 드라이버(WDDM)가 아주 훌륭한 기능을 제공합니다. GPU의 전용 VRAM(8GB)이 가득 차면, 
+# 시스템 RAM을 '공유 GPU 메모리(가상 VRAM)'로 자동 페이징(Paging)하여 끌어다 쓰는 기능입니다. 
+# 그래서 이전 버전에서는 VRAM 한계를 넘어도 속도만 느려질 뿐 (RAM은 VRAM보다 훨씬 느리므로) 다운되지는 않았던 것입니다.
+
+# 하지만 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True" 옵션은, 
+# PyTorch가 GPU 메모리를 OS에 맡기지 않고 아주 세밀하게 직접 통제(Virtual Memory Management API 사용)하도록 강제합니다. 
+# 이 설정이 WSL2의 자동 페이징 시스템과 심각한 충돌을 일으켜, 가상 메모리로 넘어가야 할 타이밍에 PyTorch 내부 할당기가 뻗어버립니다(Assert Failed).
+
+# expandable_segments 대신, 파편화된 메모리 블록 크기를 제한하여 안전하게 조각모음을 유도하는 옵션으로 변경
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
+
 
 warnings.filterwarnings("ignore", message=".*pyg-lib.*")
 warnings.filterwarnings("ignore", message=".*transductive only.*")
@@ -81,6 +97,14 @@ def run_model(detector, data, seeds, mask=None):
         auc_scores.append(auc_score)
         ap_scores.append(ap_score)
         f1_scores.append(f1)
+        
+        # ==========================================================
+        # ✅ 각 SEED 반복문이 끝날 때마다 사용된 텐서 정리
+        # ==========================================================
+        del pred, score, y_true, y_score, y_pred
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     return (np.mean(auc_scores), np.std(auc_scores), 
             np.mean(ap_scores), np.std(ap_scores),
@@ -89,7 +113,7 @@ def run_model(detector, data, seeds, mask=None):
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--chain', type=str, default='polygon')
-    parser.add_argument('--gpu', type=int, default=0, help='GPU index to use')
+    parser.add_argument('--device', type=int, default=0, help='GPU index to use')
     return parser.parse_args()
 
 def main():
@@ -97,7 +121,7 @@ def main():
     chain = args.chain
 
     # =========================================================================
-    # ✅ 메모리 최적화: GraphDatasetGenerator 대신 JSON 초경량 파싱 (Lazy Loading) 적용
+    # 메모리 최적화: GraphDatasetGenerator 대신 JSON 초경량 파싱 (Lazy Loading) 적용
     # =========================================================================
     graphs_dir = Path(f"../../_data/GoG/{chain}/graphs/")
     num_nodes = len(list(graphs_dir.glob("*.json")))
@@ -149,11 +173,11 @@ def main():
     global_data.test_mask = test_mask
 
     model_params = {
-        "DOMINANT": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [16, 32] for lr in [0.01, 0.005] for e in [50, 100]],
-        "DONE": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [16, 32] for lr in [0.01, 0.005] for e in [50, 100]],
-        "GAE": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [16, 32] for lr in [0.01, 0.005] for e in [50, 100]],
-        "AnomalyDAE": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [16, 32] for lr in [0.01, 0.005] for e in [50, 100]],
-        "CoLA": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [16, 32] for lr in [0.01, 0.005] for e in [50, 100]],
+        "DOMINANT": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
+        "DONE": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
+        "GAE": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
+        "AnomalyDAE": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01,  0.1] for e in [50, 100, 150]],
+        "CoLA": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
     }
 
     MODEL_MAP = {
@@ -171,78 +195,152 @@ def main():
             num_layers=2,
             epoch=param["epoch"],
             lr=param["lr"],
-            gpu=args.gpu,
+            gpu=args.device,
         )
 
     seed_for_param_selection = 42
     best_model_params = {}
+    completed_tasks = set()
+
+    results = []
+    final_results = []
+    
+    checkpoint_dir = f"../../_data/results/fraud_detection"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    checkpoint_file = f"{checkpoint_dir}/{chain}_roc-auc_checkpoint.json"
+
+    if os.path.exists(checkpoint_file):
+        try:
+            with open(checkpoint_file, 'r') as f:
+                ckpt_data = json.load(f)
+                best_model_params = ckpt_data.get("best_model_params", {})
+                completed_tasks = set(ckpt_data.get("completed_tasks", []))
+            print(f"\n[Checkpoint Loaded] Resuming from {len(completed_tasks)} completed steps...")
+        except Exception as e:
+            print(f"Failed to load checkpoint: {e}")
 
     print("\n--- Hyperparameter Search (using Validation Set) ---")
     for model_name, param_list in model_params.items():
         for param in param_list:
+            task_id = f"{model_name}_{param['hid_dim']}_{param['lr']}_{param['epoch']}"
+            
+            if task_id in completed_tasks:
+                continue
+            
             detector = build_detector(model_name, param)
             
-            # 파라미터 튜닝 시에는 val_mask를 사용
-            avg_auc, std_auc, avg_ap, std_ap, avg_f1, std_f1 = run_model(
-                detector, global_data, [seed_for_param_selection], mask=global_data.val_mask
-            )
+            try:
+                # 파라미터 튜닝 시에는 val_mask를 사용
+                avg_auc, std_auc, avg_ap, std_ap, avg_f1, std_f1 = run_model(
+                    detector, global_data, [seed_for_param_selection], mask=global_data.val_mask
+                )
 
-            # AUC를 기준으로 최고 성능 모델 선정 (필요 시 F1으로 변경 가능)
-            if (model_name not in best_model_params) or (
-                avg_auc > best_model_params[model_name].get("Best AUC", 0)
-            ):
-                best_model_params[model_name] = {
-                    "Best AUC": avg_auc,
-                    "AUC Std Dev": std_auc,
-                    "Best AP": avg_ap,
-                    "AP Std Dev": std_ap,
-                    "Best F1": avg_f1,
-                    "F1 Std Dev": std_f1,
-                    "Params": param,
-                }
+                # AUC를 기준으로 최고 성능 모델 선정 (필요 시 F1으로 변경 가능)
+                if (model_name not in best_model_params) or (
+                    avg_auc > best_model_params[model_name].get("Best AUC", 0)
+                ):
+                    best_model_params[model_name] = {
+                        "Best AUC": avg_auc,
+                        "AUC Std Dev": std_auc,
+                        "Best AP": avg_ap,
+                        "AP Std Dev": std_ap,
+                        "Best F1": avg_f1,
+                        "F1 Std Dev": std_f1,
+                        "Params": param,
+                    }
+                # 날짜-시각 문자열 (파일명에 안전하도록 초단위까지만)
+                time_str = datetime.now().strftime("%Y:%m:%d_%H:%M:%S")
 
-            print(
-                f"Tested {model_name} with {param}: "
-                f"Val AUC={avg_auc:.4f}, Val F1={avg_f1:.4f}, Val AP={avg_ap:.4f}"
-            )
+                print(
+                    f"{time_str} --> Tested {model_name} with {param}: "
+                    f"Val AUC={avg_auc:.4f}, Std AUC={std_auc:.4f}, Avg AP={avg_ap:.4f}, Std AP={std_ap:.4f}, Val F1={avg_f1:.4f}, Val AP={avg_ap:.4f}"
+                )
+
+                # CSV 저장을 위한 데이터 정리
+                results.append({
+                    "Timestamp": time_str,
+                    "Dataset": chain,
+                    "Model": model_name,
+                    "Best Params": str(param),
+                    "Val AUC": round(avg_auc, 4),
+                    "Val AUC Std Dev": round(std_auc, 4),
+                    "Val F1": round(avg_f1, 4),
+                    "Val F1 Std Dev": round(std_f1, 4),
+                    "Val AP": round(avg_ap, 4),
+                    "Val AP Std Dev": round(std_ap, 4),
+                })
+
+                completed_tasks.add(task_id)
+                with open(checkpoint_file, 'w') as f:
+                    json.dump({
+                        "best_model_params": best_model_params,
+                        "completed_tasks": list(completed_tasks)
+                    }, f, indent=4)
+                    
+            except Exception as e:
+                print(f"\n[ERROR] {model_name} failed with {param}. Skipping to next. Reason: {e}\n")
+                continue
+                
+            finally:
+                # ==========================================================
+                # ✅ 각 하이퍼파라미터 조합 검증이 끝날 때마다 모델 파괴 및 강제 캐시 삭제
+                # ==========================================================
+                del detector
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
     seeds_for_evaluation = [42, 43, 44]
-    final_results = []
 
     print("\n--- Final Evaluation (using Test Set) ---")
     for model_name, stats in best_model_params.items():
         param = stats["Params"]
         detector = build_detector(model_name, param)
         
-        # 최종 평가는 test_mask를 사용
-        avg_auc, std_auc, avg_ap, std_ap, avg_f1, std_f1 = run_model(
-            detector, global_data, seeds_for_evaluation, mask=global_data.test_mask
-        )
-        
-        print(
-            f"[{model_name}] Test AUC: {avg_auc:.4f}±{std_auc:.4f} | "
-            f"Test F1: {avg_f1:.4f}±{std_f1:.4f} | Test AP: {avg_ap:.4f}±{std_ap:.4f}"
-        )
-        
-        # CSV 저장을 위한 데이터 정리
-        final_results.append({
-            "Dataset": chain,
-            "Model": model_name,
-            "Best Params": str(param),
-            "Test AUC": round(avg_auc, 4),
-            "Test F1": round(avg_f1, 4),
-            "Test AP": round(avg_ap, 4),
-            "Uncertainty": "N/A" # 베이스라인은 불확실성 지표가 없으므로 N/A 처리
-        })
+        try:
+            # 최종 평가는 test_mask를 사용
+            avg_auc, std_auc, avg_ap, std_ap, avg_f1, std_f1 = run_model(
+                detector, global_data, seeds_for_evaluation, mask=global_data.test_mask
+            )
+            
+            # 날짜-시각 문자열 (파일명에 안전하도록 초단위까지만)
+            time_str = datetime.now().strftime("%Y:%m:%d_%H:%M:%S")
+            print(f'{time_str} --> [{model_name}] Test AUC: {avg_auc:.4f}±{std_auc:.4f} | '
+                f'Test F1: {avg_f1:.4f}±{std_f1:.4f} | Test AP: {avg_ap:.4f}±{std_ap:.4f}'
+            )
+            
+            # CSV 저장을 위한 데이터 정리
+            final_results.append({
+                "Timestamp": time_str,
+                "Dataset": chain,
+                "Model": model_name,
+                "Best Params": str(param),
+                "Test AUC": round(avg_auc, 4),
+                "Test AUC Std Dev": round(std_auc, 4),
+                "Test F1": round(avg_f1, 4),
+                "Test F1 Std Dev": round(std_f1, 4),
+                "Test AP": round(avg_ap, 4),
+                "Test AP Std Dev": round(std_ap, 4),
+                # "Uncertainty": "N/A" # 베이스라인은 불확실성 지표가 없으므로 N/A 처리
+            })
+        finally:
+            del detector
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     # 결과를 DataFrame으로 변환 후 CSV로 저장 (Batch Script 연동 목적)
-    results_df = pd.DataFrame(final_results)
+    results_df = pd.DataFrame(results)
+    final_results_df = pd.DataFrame(final_results)
 
     RESULT_PATH = f"../../_data/results/fraud_detection"
     os.makedirs(RESULT_PATH, exist_ok=True)
-    csv_path = f"{RESULT_PATH}/baseline_{chain}_log.csv"
+    csv_path = f"{RESULT_PATH}/roc-auc-results_{chain}_log.csv"
     results_df.to_csv(csv_path, index=False)
-    print(f"\n✅ 최종 베이스라인 평가 결과가 {csv_path} 에 저장되었습니다.")
+    final_csv_path = f"{RESULT_PATH}/roc-auc-final_{chain}_log.csv"
+    final_results_df.to_csv(final_csv_path, index=False)
+    print(f"\n✅ 최종 베이스라인 평가 결과가 {RESULT_PATH} 에 저장되었습니다.")
+
 
 if __name__ == "__main__":
     main()

@@ -142,7 +142,7 @@ def main():
         print(f"Processing {len(tasks)} graphs with embedding dimension {args.embedding_dim}...")
         
         # tqdm 적용
-        for _ in tqdm(pool.imap_unordered(worker_process, tasks, chunksize=1), total=len(tasks)):
+        for _ in tqdm(pool.imap_unordered(worker_process, tasks, chunksize=4), total=len(tasks)):
             pass 
             
     except Exception as e:
