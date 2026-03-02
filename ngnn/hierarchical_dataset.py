@@ -240,7 +240,7 @@ def test_dataset(chain='polygon'):
     
     # Paths
     data_dir = f"../../_data/GoG/{chain}/local_graphs"
-    contract_graph_path = f"../../_data/GoG/{chain}/{chain}_hybrid.pt"
+    contract_graph_path = f"../../_data/GoG/{chain}/{chain}_hybrid_graph.pt"
     
     # Create dataset
     dataset = HierarchicalDataset(

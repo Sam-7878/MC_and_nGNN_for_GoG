@@ -373,7 +373,7 @@ if __name__ == "__main__":
         k_neighbors=args.k_neighbors
     )
     
-    edge_index, contract_to_idx = builder.build(save_path=f'../../_data/GoG/{args.chain}/{args.chain}_contract_graph.pt')
+    edge_index, contract_to_idx = builder.build(save_path=f'../../_data/GoG/{args.chain}/{args.chain}_{args.method}_graph.pt')
     
     print("\n✅ Contract graph construction complete!")
     print(f"Use this graph for Hierarchical GNN training")
