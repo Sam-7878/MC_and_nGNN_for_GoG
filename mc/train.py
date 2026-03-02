@@ -441,7 +441,7 @@ def main():
     print(f"🚀 Stabilized MC Training")
     print(f"Device: {device}, MC Train/Eval: {args.mc_train}/{args.mc_eval}")
     
-    data_dir = f'../../_data/GoG/{args.chain}'
+    data_dir = f'../../_data/GoG/{args.chain}/graphs'
     
     # Clean up old/incompatible checkpoints
     model_save_path = os.path.join(data_dir, f'best_model_{args.chain}.pt')

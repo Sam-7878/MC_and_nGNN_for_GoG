@@ -357,31 +357,23 @@ class ContractGraphBuilder:
 # ============================================================
 # CLI Script
 # ============================================================
+import argparse
 
-if __name__ == "__main__":
-    import argparse
-    
+if __name__ == "__main__":   
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default="../../_data/GoG/polygon",
-                       help='Directory containing JSON files')
-    parser.add_argument('--method', type=str, default='hybrid',
-                       choices=['knn', 'label', 'hybrid'],
-                       help='Method to build contract graph')
-    parser.add_argument('--k_neighbors', type=int, default=5,
-                       help='Number of neighbors for k-NN')
-    parser.add_argument('--output', type=str, 
-                       default='../../_data/GoG/polygon/polygon_contract_graph.pt',
-                       help='Output path for contract graph')
+    parser.add_argument('--chain', type=str, required=True, help='Chain name (e.g., polygon)')
+    parser.add_argument('--method', type=str, default='hybrid', choices=['knn', 'label', 'hybrid'], help='Method to build contract graph')
+    parser.add_argument('--k_neighbors', type=int, default=5, help='Number of neighbors for k-NN')
     args = parser.parse_args()
     
     # Build contract graph
     builder = ContractGraphBuilder(
-        data_dir=args.data_dir,
+        data_dir=f"../../_data/GoG/{args.chain}/graphs",
         method=args.method,
         k_neighbors=args.k_neighbors
     )
     
-    edge_index, contract_to_idx = builder.build(save_path=args.output)
+    edge_index, contract_to_idx = builder.build(save_path=f'../../_data/GoG/{args.chain}/{args.chain}_contract_graph.pt')
     
     print("\n✅ Contract graph construction complete!")
     print(f"Use this graph for Hierarchical GNN training")

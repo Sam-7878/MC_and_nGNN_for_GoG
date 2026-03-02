@@ -7,11 +7,12 @@ import os
 from collections import defaultdict, Counter
 from pathlib import Path
 
-def analyze_gog_structure(data_dir="../../_data/GoG/polygon"):
+def analyze_gog_structure(data_dir="../../_data/GoG/polygon/graphs"):
     """현재 GoG 데이터 구조 분석"""
     
     json_files = list(Path(data_dir).glob("*.json"))
-    print(f"📊 Total JSON files: {len(json_files)}\n")
+    n_json_files = len(json_files)
+    print(f"📊 Total JSON files: {n_json_files}\n")
     
     # 샘플 파일 로드
     sample_file = json_files[0]
@@ -22,13 +23,18 @@ def analyze_gog_structure(data_dir="../../_data/GoG/polygon"):
     print("🔍 Sample Data Structure")
     print("=" * 60)
     print(f"Keys: {sample.keys()}")
-    print(f"\nNodes: {len(sample.get('nodes', []))} items")
+    # 수정 전: len(sample.get('nodes', []))
+    # 수정 후: len(sample.get('features', []))
+    print(f"\nNodes: {len(sample.get('features', []))} items")
     print(f"Edges: {len(sample.get('edges', []))} items")
     
+    # 글로벌 엣지(Inter-contract edges)는 json 파일에서 찾지 않고 
+    # 별도의 CSV에서 로드해야 한다는 점을 스크립트나 마인드셋에 반영해야 합니다.
+    
     # Node 구조
-    if sample.get('nodes'):
-        print(f"\n📌 Sample Node:")
-        print(json.dumps(sample['nodes'][0], indent=2))
+    if sample.get('features'):
+        print(f"\n📌 Sample Feature:")
+        print(json.dumps(list(sample['features'])[0], indent=2))
     
     # Edge 구조
     if sample.get('edges'):
@@ -119,7 +125,7 @@ if __name__ == "__main__":
     parser.add_argument('--chain', type=str, required=True)
     args = parser.parse_args()
 
-    result = analyze_gog_structure(f"../../_data/GoG/{args.chain}")
+    result = analyze_gog_structure(f"../../_data/GoG/{args.chain}/graphs")
     
     print("\n" + "=" * 60)
     print("✅ Analysis Complete")

@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 from tqdm import tqdm
 from torch_geometric.data import Data
+import concurrent.futures
+import multiprocessing
 import argparse
 import warnings
 warnings.filterwarnings('ignore')
@@ -29,7 +31,7 @@ class LocalGraphGenerator:
         
         self.tx_dir = self.tx_data_root / chain
         self.contract_graph_path = self.gog_root / chain / f"{chain}_hybrid.pt"
-        self.json_dir = self.gog_root / chain  # JSON files directory
+        self.json_dir = self.gog_root / chain / "graphs" # JSON files directory
         self.output_dir = self.gog_root / chain / "local_graphs"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -39,61 +41,44 @@ class LocalGraphGenerator:
         print(f"📂 Output directory: {self.output_dir}")
     
     def load_json_address_mapping(self):
-        """
-        Load JSON files to create mapping from contract_id to real address
-        
-        Returns:
-            dict: {contract_id: real_address}
-        """
-        print(f"\n📥 Loading JSON files to extract real addresses...")
-        
-        json_files = list(self.json_dir.glob("[0-9]*.json"))
-        print(f"Found {len(json_files)} JSON files")
-        
-        id_to_address = {}
-        
-        for json_file in tqdm(json_files, desc="Reading JSON files"):
-            # Extract contract ID from filename (e.g., "0.json" -> 0)
-            try:
-                contract_id = int(json_file.stem)
-            except ValueError:
-                continue
+            """
+            Load global mapping JSON to create mapping from contract_id to real address
             
-            # Read JSON
+            Returns:
+                dict: {contract_id: real_address}
+            """
+            # tx_data_root가 "../../_data/dataset/transactions" 이므로, 
+            # 부모 디렉토리로 가서 global_graph 경로를 찾습니다.
+            mapping_file = self.tx_data_root.parent / "global_graph" / f"{self.chain}_contract_to_number_mapping.json"
+            
+            print(f"\n📥 Loading global mapping from {mapping_file}...")
+            
+            id_to_address = {}
+            
+            if not mapping_file.exists():
+                print(f"❌ Error: Mapping file not found at {mapping_file}")
+                return id_to_address
+                
             try:
-                with open(json_file, 'r') as f:
-                    data = json.load(f)
+                with open(mapping_file, 'r') as f:
+                    # 파일 구조: {"0xAddress...": 0, "0xAddress...": 1}
+                    address_to_id = json.load(f)
                 
-                # Try common field names for contract address
-                address = None
-                for key in ['address', 'contract_address', 'contractAddress', 'addr']:
-                    if key in data:
-                        address = data[key]
-                        break
+                # 역방향 매핑 구성: {0: "0xAddress...", 1: "0xAddress..."}
+                for address, contract_id in address_to_id.items():
+                    id_to_address[int(contract_id)] = address.lower()
+                    
+                print(f"✅ Extracted {len(id_to_address)} contract addresses from mapping file")
                 
-                # If not found, check if there's a field with address-like value
-                if address is None:
-                    for key, value in data.items():
-                        if isinstance(value, str) and len(value) == 42 and value.startswith('0x'):
-                            address = value
-                            break
-                
-                if address:
-                    id_to_address[contract_id] = address.lower()
-                else:
-                    print(f"⚠️ No address found in {json_file.name}")
+                # Show samples
+                print(f"\n📋 Sample mappings:")
+                for i, (cid, addr) in enumerate(list(id_to_address.items())[:5]):
+                    print(f"   Contract {cid}: {addr}")
                     
             except Exception as e:
-                print(f"❌ Error reading {json_file.name}: {e}")
-        
-        print(f"✅ Extracted {len(id_to_address)} contract addresses from JSON files")
-        
-        # Show samples
-        print(f"\n📋 Sample mappings:")
-        for i, (cid, addr) in enumerate(list(id_to_address.items())[:5]):
-            print(f"   Contract {cid}: {addr}")
-        
-        return id_to_address
+                print(f"❌ Error reading mapping file: {e}")
+            
+            return id_to_address
     
     def load_contract_info(self):
         """Load contract graph"""
@@ -222,6 +207,7 @@ class LocalGraphGenerator:
             contract_id=contract_id
         )
     
+    
     def generate_all_local_graphs(self):
         """Generate local graphs for all contracts"""
         
@@ -264,7 +250,7 @@ class LocalGraphGenerator:
                 csv_file = address_to_csv[real_address]
                 
                 try:
-                    df = pd.read_csv(csv_file)
+                    df = pd.read_csv(csv_file, engine='pyarrow')
                     local_graph = self.build_local_graph_from_df(df, contract_id)
                     
                     output_path = self.output_dir / f"{contract_id}.pt"
@@ -318,7 +304,7 @@ def main():
     
     generator = LocalGraphGenerator(
         tx_data_root="../../_data/dataset/transactions",
-        gog_root="../../_data/GoG",
+        gog_root=f"../../_data/GoG",
         chain=args.chain
     )
     
