@@ -256,7 +256,7 @@ def upgrade_gog_directory_parallel(data_dir, num_workers=None, fast_mode=False):
     with open(os.path.join(data_dir, json_files[0]), 'r') as f:
         sample = json.load(f)
     
-    current_dim = len(list(sample['features'].values())[0])
+    current_dim = len(list(sample['features'])[0])
     print(f"📊 Current feature dimension: {current_dim}")
     
     if current_dim == 24:
@@ -311,7 +311,7 @@ def upgrade_gog_directory_parallel(data_dir, num_workers=None, fast_mode=False):
     with open(os.path.join(data_dir, json_files[0]), 'r') as f:
         sample = json.load(f)
     
-    new_dim = len(list(sample['features'].values())[0])
+    new_dim = len(list(sample['features'])[0])
     print(f"\n📊 New feature dimension: {new_dim}")
     
     if new_dim == 24:
@@ -325,7 +325,7 @@ def upgrade_gog_directory_parallel(data_dir, num_workers=None, fast_mode=False):
     for i in range(min(100, len(json_files))):
         with open(os.path.join(data_dir, json_files[i]), 'r') as f:
             data = json.load(f)
-        for feat in data['features'].values():
+        for feat in data['features']:
             all_features.append(feat)
     
     all_features = np.array(all_features)
@@ -342,7 +342,7 @@ def main():
                        help='Blockchain name (e.g., polygon)')
     parser.add_argument('--workers', type=int, default=None,
                        help='Number of parallel workers (default: CPU count - 1)')
-    parser.add_argument('--fast', action='store_true',
+    parser.add_argument('--fast', action='store_true', default=False,
                        help='Use fast mode (10x faster, approximated centrality)')
     args = parser.parse_args()
     

@@ -286,7 +286,7 @@ def test_dataset(chain='polygon'):
     
     print("\n" + "="*60)
     print("✅ All tests passed!")
-    print("="*60)
+    print("="*60 + "\n\n")
 
 
 if __name__ == "__main__":

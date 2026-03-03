@@ -8,6 +8,7 @@ from tqdm import tqdm
 from sklearn.metrics.pairwise import cosine_similarity
 from collections import defaultdict
 import networkx as nx
+import pandas as pd
 
 class ContractGraphBuilder:
     """
@@ -52,8 +53,8 @@ class ContractGraphBuilder:
         print(f"✅ Built contract graph: {edge_index.shape[1]} edges")
         
         # Step 4: Analyze and save
-        self._analyze_contract_graph(edge_index, labels)
-        
+        self._analyze_contract_graph(edge_index, labels)     
+
         if save_path:
             self._save_contract_graph(edge_index, self.method, graphs, embeddings, save_path)
         
