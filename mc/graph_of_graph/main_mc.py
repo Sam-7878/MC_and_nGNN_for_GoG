@@ -583,28 +583,82 @@ def main():
         f"label 범위 이상: {labels.min()}~{labels.max()}"
     print(f"✅ features: {features.shape}, labels unique: {labels.unique()}")
 
+
+
+
+
+
+
+
+
+
     contract_to_idx = {cid: i for i, cid in enumerate(contract_ids)}
 
     edges = []
+    invalid_edges = []
+
     with open(global_edges_path, 'r') as f:
         for line in f:
             parts = line.strip().split()
             if len(parts) >= 2:
                 src, dst = parts[0], parts[1]
-                if src in contract_to_idx and dst in contract_to_idx:
-                    edges.append([contract_to_idx[src], contract_to_idx[dst]])
+                src_idx = contract_to_idx.get(src)
+                dst_idx = contract_to_idx.get(dst)
+
+                if src_idx is not None and dst_idx is not None:
+                    edges.append([src_idx, dst_idx])
+                else:
+                    reason = []
+                    if src_idx is None:
+                        reason.append(f"src '{src}' not found")
+                    if dst_idx is None:
+                        reason.append(f"dst '{dst}' not found")
+                    invalid_edges.append((src, dst, "; ".join(reason)))
+
+    print(f'Invalid edges (not in contract_to_idx): {len(invalid_edges)}')
+    if invalid_edges:
+        print("Sample invalid_edges:", invalid_edges[:5])
 
     edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
-    if edge_index.numel() > 0:
-        edge_index = coalesce(edge_index)
+    if edge_index.numel() == 0:
+        edge_index = torch.empty((2, 0), dtype=torch.long)
+
+    from torch_geometric.utils import add_self_loops, coalesce
+    edge_index, _ = add_self_loops(edge_index, num_nodes=num_nodes)
+    edge_index = coalesce(edge_index, num_nodes=num_nodes)
+
+    node_ids_in_edges = torch.unique(edge_index)
+    missing_nodes = sorted(set(range(num_nodes)) - set(node_ids_in_edges.tolist()))
+
+    print(f'nodes appearing in edge_index: {node_ids_in_edges.numel()} / {num_nodes}')
+    print(f'missing nodes from edge_index: {len(missing_nodes)}')
+    print(f'edge_index min: {edge_index.min().item()}, max: {edge_index.max().item()}, num_nodes: {num_nodes}')
+
+    assert edge_index.min().item() >= 0
+    assert edge_index.max().item() < num_nodes
 
     train_mask, val_mask, test_mask = create_masks(num_nodes)
 
-    global_data            = Data(x=features, edge_index=edge_index, y=labels)
+    global_data = Data(x=features, edge_index=edge_index, y=labels)
+    global_data.num_nodes = num_nodes
     global_data.train_mask = train_mask
-    global_data.val_mask   = val_mask
-    global_data.test_mask  = test_mask
-    global_data.chain      = chain
+    global_data.val_mask = val_mask
+    global_data.test_mask = test_mask
+    global_data.chain = chain
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     hyperparameters = [
         {"hid_dim": d, "lr": lr, "epoch": e}
@@ -624,8 +678,9 @@ def main():
     }
 
     RESULT_PATH    = f"../../_data/results/fraud_detection_mc"
-    checkpoint_dir = f"{RESULT_PATH}/checkpoints"
+    checkpoint_dir = f"{RESULT_PATH}/checkpoints/{chain}"
     os.makedirs(RESULT_PATH, exist_ok=True)
+    os.makedirs(checkpoint_dir, exist_ok=True)
 
     all_results       = []
     all_final_results = []
