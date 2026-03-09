@@ -1,0 +1,28 @@
+ablations:
+  - name: "base"
+    overrides: {}
+
+  - name: "local_only"
+    overrides:
+      model:
+        use_global_gnn: false
+
+  - name: "no_signed_log"
+    overrides:
+      data:
+        apply_signed_log: false
+
+  - name: "no_class_weights"
+    overrides:
+      training:
+        use_class_weights: false
+
+  - name: "hidden_128"
+    overrides:
+      model:
+        hidden_dim: 128
+
+  - name: "dropout_00"
+    overrides:
+      model:
+        dropout: 0.0

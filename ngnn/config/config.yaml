@@ -1,0 +1,71 @@
+experiment:
+  run_name: "phase1_base_polygon"
+  output_dir: "./outputs"
+
+system:
+  seed: 42
+  device: "auto"          # "auto", "cpu", "cuda"
+  deterministic: true
+
+data:
+  data_dir: "../../_data/GoG/polygon/graphs"
+  contract_graph_path: "../../_data/GoG/polygon/polygon_hybrid_graph.pt"
+
+  # train / val / test
+  split_ratio: [0.7, 0.15, 0.15]
+
+  # dataloader
+  batch_size: 8
+  num_workers: 0
+  pin_memory: false
+  persistent_workers: false
+
+  # numeric safety
+  clip_value: 1.0e12
+  apply_signed_log: true
+
+model:
+  # required core params
+  hidden_dim: 64
+  num_classes: 2
+  use_global_gnn: true
+
+  # optional params
+  dropout: 0.2
+  local_num_layers: 2
+  global_num_layers: 2
+  num_heads: 4
+
+optimizer:
+  name: "adamw"           # adam / adamw / sgd
+  lr: 0.001
+  weight_decay: 0.0001
+
+scheduler:
+  name: "reduce_on_plateau"   # none / reduce_on_plateau / cosine / step
+  mode: "max"
+  factor: 0.5
+  patience: 3
+  min_lr: 1.0e-6
+
+training:
+  epochs: 30
+  patience: 8
+  grad_clip: 1.0
+  label_smoothing: 0.05
+  use_class_weights: true
+
+  # early stopping / best checkpoint
+  monitor_metric: "f1"    # accuracy / f1 / auroc / auprc / loss
+  monitor_mode: "max"     # max / min
+
+  # logging
+  log_interval: 10
+  verbose: true
+
+evaluation:
+  threshold: 0.5
+
+  mc_dropout:
+    enabled: false
+    n_samples: 20

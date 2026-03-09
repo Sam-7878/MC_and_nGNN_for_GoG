@@ -3,461 +3,538 @@
 from __future__ import annotations
 
 import json
-import warnings
+import math
+import random
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
-from torch_geometric.utils import dropout_edge
+
+
+def signed_log1p_tensor(x: torch.Tensor) -> torch.Tensor:
+    """
+    Signed log transform for heavy-tailed numeric features.
+    """
+    return torch.sign(x) * torch.log1p(torch.abs(x))
+
+
+def to_safe_float_tensor(
+    array_like,
+    clip_value: float = 1e12,
+    apply_signed_log: bool = True,
+) -> torch.Tensor:
+    """
+    Convert array-like input to a finite float tensor.
+
+    Steps:
+    1. cast to float32
+    2. replace NaN / Inf
+    3. clip extreme values
+    4. optional signed-log transform
+    """
+    arr = np.asarray(array_like, dtype=np.float32)
+
+    arr = np.nan_to_num(
+        arr,
+        nan=0.0,
+        posinf=clip_value,
+        neginf=-clip_value,
+    )
+    arr = np.clip(arr, -clip_value, clip_value)
+
+    t = torch.from_numpy(arr)
+
+    if apply_signed_log:
+        t = signed_log1p_tensor(t)
+
+    return t
 
 
 class HierarchicalDataset(Dataset):
     """
-    MVP Hierarchical Dataset for GoG + nGNN.
+    Dataset for GoG + nGNN hierarchical learning.
 
-    Raw local graph JSON schema:
+    Each item represents ONE contract and returns:
         {
-          "edges": [[src, dst], ...],
-          "features": [[...], ...],              # local node features
-          "contract_feature": [...],             # static contract/global feature
-          "label": 0 or 1
+            "local_graph"   : PyG Data,
+            "contract_id"   : int,
+            "contract_name" : str,
+            "label"         : int,
         }
 
-    Returned item:
-        {
-          "local_graph": Data,
-          "contract_id": int,                    # global contract node id
-          "contract_name": str,                  # json stem
-          "label": int,
-          "contract_feature": FloatTensor[Fg],
-          "global_edge_index": LongTensor[2, E],
-          "global_features": FloatTensor[N, Fg],
-        }
+    The dataset also stores FULL global graph components:
+        self.global_edge_index : LongTensor [2, E]
+        self.global_features   : FloatTensor [N, Fg]
+
+    Expected per-contract JSON schema (robustly handled):
+        - node features:
+            "features" | "node_features" | "x"
+        - local edges:
+            "edges" | "edge_index"
+        - optional local edge features:
+            "edge_attr" | "edge_features"
+        - contract/global feature:
+            "contract_feature" | "contract_features" | "global_features"
+        - label:
+            "label" | "y" | "is_malicious" | "target"
+        - name/id:
+            "contract_name" | "address" | filename stem
+
+    Expected global graph .pt schema (robustly handled):
+        dict or PyG Data with:
+            - edge_index
+            - one of:
+                "contract_to_idx"
+                "addr_to_idx"
+                "name_to_idx"
+                "contract_names"
+                "node_names"
     """
 
     def __init__(
         self,
         data_dir: str,
-        contract_graph_path: Optional[str] = None,
+        contract_graph_path: str,
         split: str = "train",
-        split_seed: int = 42,
-        train_ratio: float = 0.8,
-        val_ratio: float = 0.1,
-        test_ratio: float = 0.1,
-        edge_dropout: float = 0.0,
-        force_reload_global_graph: bool = False,
+        split_ratio: Tuple[float, float, float] = (0.7, 0.15, 0.15),
+        seed: int = 42,
+        clip_value: float = 1e12,
+        apply_signed_log: bool = True,
     ):
         super().__init__()
 
         self.data_dir = Path(data_dir)
-        self.contract_graph_path = Path(contract_graph_path) if contract_graph_path else None
-        self.split = split.lower()
-        self.split_seed = split_seed
-        self.train_ratio = train_ratio
-        self.val_ratio = val_ratio
-        self.test_ratio = test_ratio
-        self.edge_dropout = edge_dropout
-        self.force_reload_global_graph = force_reload_global_graph
-
-        if self.split not in {"train", "val", "test", "all"}:
-            raise ValueError(f"split must be one of ['train', 'val', 'test', 'all'], got {self.split}")
+        self.contract_graph_path = Path(contract_graph_path)
+        self.split = split
+        self.split_ratio = split_ratio
+        self.seed = seed
+        self.clip_value = clip_value
+        self.apply_signed_log = apply_signed_log
 
         if not self.data_dir.exists():
-            raise FileNotFoundError(f"data_dir does not exist: {self.data_dir}")
-
-        ratio_sum = self.train_ratio + self.val_ratio + self.test_ratio
-        if not np.isclose(ratio_sum, 1.0):
-            raise ValueError(
-                f"train_ratio + val_ratio + test_ratio must be 1.0, got {ratio_sum}"
+            raise FileNotFoundError(f"data_dir not found: {self.data_dir}")
+        if not self.contract_graph_path.exists():
+            raise FileNotFoundError(
+                f"contract_graph_path not found: {self.contract_graph_path}"
             )
 
-        self.all_files = sorted(self.data_dir.glob("*.json"))
-        if len(self.all_files) == 0:
-            raise FileNotFoundError(f"No JSON files found in: {self.data_dir}")
+        if split not in {"train", "val", "test", "all"}:
+            raise ValueError(f"split must be one of train/val/test/all, got {split}")
 
-        # ------------------------------------------------------------------
-        # Step 1. Scan metadata from all JSON files
-        # ------------------------------------------------------------------
-        self.meta = self._scan_all_metadata(self.all_files)
+        # ------------------------------------------------------------
+        # 1) Load all per-contract JSONs
+        # ------------------------------------------------------------
+        self.all_samples = self.load_contract_graphs()
 
-        self.contract_names = [m["contract_name"] for m in self.meta]
-        self.labels_all = np.array([m["label"] for m in self.meta], dtype=np.int64)
+        if len(self.all_samples) == 0:
+            raise RuntimeError(f"No JSON files found in: {self.data_dir}")
 
-        # Dimensions inferred from actual raw JSON schema
-        self.node_dim = int(self.meta[0]["node_dim"])
-        self.edge_dim = 1  # raw JSON has no edge_attr -> synthesize constant 1-dim edge feature
-        self.global_feat_dim = int(self.meta[0]["contract_feat_dim"])
-        self.num_classes = int(len(sorted(set(self.labels_all.tolist()))))
+        # ------------------------------------------------------------
+        # 2) Load full global contract graph
+        # ------------------------------------------------------------
+        (
+            self.global_edge_index,
+            self.contract_to_idx,
+            self.idx_to_contract,
+        ) = self.load_global_contract_graph()
 
-        # ------------------------------------------------------------------
-        # Step 2. Global contract indexing
-        # ------------------------------------------------------------------
-        self.contract_to_idx = {name: idx for idx, name in enumerate(self.contract_names)}
-        self.idx_to_contract = {idx: name for name, idx in self.contract_to_idx.items()}
+        # ------------------------------------------------------------
+        # 3) Build full global feature matrix [N, Fg]
+        # ------------------------------------------------------------
+        self.global_features = self.build_global_feature_matrix()
 
-        # ------------------------------------------------------------------
-        # Step 3. Build global feature matrix from raw JSON contract_feature
-        #         shape: [N_contracts, global_feat_dim]
-        # ------------------------------------------------------------------
-        self.global_features = self._build_global_feature_matrix()
+        # ------------------------------------------------------------
+        # 4) Assign contract_id to each sample
+        # ------------------------------------------------------------
+        for sample in self.all_samples:
+            contract_name = sample["contract_name"]
+            if contract_name not in self.contract_to_idx:
+                raise KeyError(
+                    f"Contract '{contract_name}' from JSON not found in global graph mapping."
+                )
+            sample["contract_id"] = self.contract_to_idx[contract_name]
 
-        # ------------------------------------------------------------------
-        # Step 4. Load global contract graph edge_index
-        #         If file is missing or unreadable, fallback to empty graph
-        # ------------------------------------------------------------------
-        self.global_edge_index = self._load_global_edge_index()
+        # ------------------------------------------------------------
+        # 5) Apply split
+        # ------------------------------------------------------------
+        self.samples = self.apply_split(self.all_samples)
 
-        # ------------------------------------------------------------------
-        # Step 5. Split indices
-        # ------------------------------------------------------------------
-        self.indices = self._build_split_indices()
+        # ------------------------------------------------------------
+        # 6) Infer dimensions
+        # ------------------------------------------------------------
+        self.node_dim, self.edge_dim, self.global_feat_dim = self.infer_feature_dims()
 
-        # Convenience
-        self.split_files = [self.all_files[i] for i in self.indices]
-        self.split_labels = self.labels_all[self.indices]
-
-    # ----------------------------------------------------------------------
-    # Public helpers
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Required Dataset API
+    # ------------------------------------------------------------------
     def __len__(self) -> int:
-        return len(self.indices)
+        return len(self.samples)
 
     def __getitem__(self, idx: int) -> Dict:
-        real_idx = self.indices[idx]
-        meta = self.meta[real_idx]
-        json_path = self.all_files[real_idx]
+        sample = self.samples[idx]
 
-        local_graph = self._load_local_graph(json_path)
-
-        # Optional data MC perturbation hook for future Phase 3/4
-        if self.split == "train" and self.edge_dropout > 0.0:
-            local_graph = self._apply_edge_dropout(local_graph, self.edge_dropout)
-
-        contract_name = meta["contract_name"]
-        contract_id = self.contract_to_idx[contract_name]
-        label = int(meta["label"])
-        contract_feature = self.global_features[contract_id]
+        local_graph = sample["local_graph"]
+        contract_id = sample["contract_id"]
+        contract_name = sample["contract_name"]
+        label = sample["label"]
 
         return {
             "local_graph": local_graph,
             "contract_id": contract_id,
             "contract_name": contract_name,
             "label": label,
-            "contract_feature": contract_feature,
-            "global_edge_index": self.global_edge_index,
-            "global_features": self.global_features,
         }
 
-    def get_metadata(self) -> Dict:
-        return {
-            "data_dir": str(self.data_dir),
-            "num_total_contracts": len(self.all_files),
-            "num_split_contracts": len(self.indices),
-            "split": self.split,
-            "node_dim": self.node_dim,
-            "edge_dim": self.edge_dim,
-            "global_feat_dim": self.global_feat_dim,
-            "num_classes": self.num_classes,
-            "num_global_edges": int(self.global_edge_index.size(1)),
-            "edge_dropout": self.edge_dropout,
-        }
+    # ------------------------------------------------------------------
+    # Load per-contract JSON files
+    # ------------------------------------------------------------------
+    def load_contract_graphs(self) -> List[Dict]:
+        """
+        Load all contract-level local transaction graphs from JSON files.
+        """
+        json_files = sorted(self.data_dir.glob("*.json"))
 
-    # ----------------------------------------------------------------------
-    # Metadata scan
-    # ----------------------------------------------------------------------
-    def _scan_all_metadata(self, files: List[Path]) -> List[Dict]:
-        meta = []
+        samples: List[Dict] = []
 
-        for file_path in files:
-            with open(file_path, "r") as f:
-                data = json.load(f)
+        for json_path in json_files:
+            with open(json_path, "r", encoding="utf-8") as f:
+                obj = json.load(f)
 
-            features = data.get("features", [])
-            edges = data.get("edges", [])
-            contract_feature = data.get("contract_feature", [])
-            label = int(data.get("label", 0))
+            contract_name = self._extract_contract_name(obj, json_path)
+            label = self._extract_label(obj)
+            node_features = self._extract_node_features(obj, json_path)
+            edge_index = self._extract_edge_index(obj)
+            edge_attr = self._extract_edge_attr(obj, edge_index)
+            contract_feature = self._extract_contract_feature(obj)
 
-            node_dim = self._infer_node_dim(features)
-            contract_feat_dim = self._infer_contract_feat_dim(contract_feature)
+            local_graph = Data(
+                x=node_features,                 # [num_nodes, node_dim]
+                edge_index=edge_index,          # [2, num_edges]
+                edge_attr=edge_attr,            # [num_edges, edge_dim]
+            )
 
-            meta.append(
+            samples.append(
                 {
-                    "file_path": str(file_path),
-                    "contract_name": file_path.stem,
+                    "contract_name": contract_name,
                     "label": label,
-                    "num_nodes": len(features),
-                    "num_edges": len(edges),
-                    "node_dim": node_dim,
-                    "contract_feat_dim": contract_feat_dim,
+                    "local_graph": local_graph,
+                    "contract_feature": contract_feature,   # [Fg]
                 }
             )
 
-        # Basic consistency checks
-        node_dims = sorted(set(m["node_dim"] for m in meta))
-        contract_feat_dims = sorted(set(m["contract_feat_dim"] for m in meta))
+        return samples
 
-        if len(node_dims) != 1:
-            raise ValueError(f"Inconsistent node feature dims found: {node_dims}")
-        if len(contract_feat_dims) != 1:
-            raise ValueError(f"Inconsistent contract feature dims found: {contract_feat_dims}")
-
-        return meta
-
-    @staticmethod
-    def _infer_node_dim(features: List) -> int:
-        if not features:
-            raise ValueError("Empty 'features' found. Cannot infer local node feature dim.")
-        if not isinstance(features[0], (list, tuple)):
-            raise ValueError("Expected 'features' to be a list of lists.")
-        return len(features[0])
-
-    @staticmethod
-    def _infer_contract_feat_dim(contract_feature: List) -> int:
-        if contract_feature is None:
-            return 0
-        if not isinstance(contract_feature, (list, tuple)):
-            raise ValueError("Expected 'contract_feature' to be a list.")
-        return len(contract_feature)
-
-    # ----------------------------------------------------------------------
-    # Global features
-    # ----------------------------------------------------------------------
-    def _build_global_feature_matrix(self) -> torch.Tensor:
+    # ------------------------------------------------------------------
+    # Load full global contract graph
+    # ------------------------------------------------------------------
+    def load_global_contract_graph(
+        self,
+    ) -> Tuple[torch.Tensor, Dict[str, int], Dict[int, str]]:
         """
-        Build global static feature matrix from raw JSON 'contract_feature'.
-
-        Output:
-            global_features: FloatTensor [N_contracts, global_feat_dim]
+        Load full contract-level graph and mapping from .pt file.
         """
-        num_contracts = len(self.all_files)
-        feat_dim = self.global_feat_dim
+        obj = torch.load(self.contract_graph_path, map_location="cpu")
 
-        global_features = torch.zeros((num_contracts, feat_dim), dtype=torch.float)
-
-        for i, file_path in enumerate(self.all_files):
-            with open(file_path, "r") as f:
-                data = json.load(f)
-
-            contract_feature = data.get("contract_feature", [])
-            if len(contract_feature) != feat_dim:
-                raise ValueError(
-                    f"Contract feature dim mismatch in {file_path.name}: "
-                    f"expected {feat_dim}, got {len(contract_feature)}"
+        # edge_index
+        if isinstance(obj, dict):
+            if "edge_index" in obj:
+                edge_index = obj["edge_index"]
+            else:
+                raise KeyError(
+                    f"'edge_index' not found in global graph file: {self.contract_graph_path}"
+                )
+        else:
+            if hasattr(obj, "edge_index"):
+                edge_index = obj.edge_index
+            else:
+                raise KeyError(
+                    f"'edge_index' not found in global graph object: {self.contract_graph_path}"
                 )
 
-            global_features[i] = torch.tensor(contract_feature, dtype=torch.float)
+        edge_index = torch.as_tensor(edge_index, dtype=torch.long)
+
+        if edge_index.numel() == 0:
+            edge_index = torch.empty((2, 0), dtype=torch.long)
+        elif edge_index.dim() != 2 or edge_index.size(0) != 2:
+            raise ValueError(
+                f"global edge_index must have shape [2, E], got {tuple(edge_index.shape)}"
+            )
+
+        contract_to_idx = self._extract_contract_mapping(obj)
+
+        idx_to_contract = {idx: name for name, idx in contract_to_idx.items()}
+
+        return edge_index, contract_to_idx, idx_to_contract
+
+    # ------------------------------------------------------------------
+    # Build full global feature matrix
+    # ------------------------------------------------------------------
+    def build_global_feature_matrix(self) -> torch.Tensor:
+        """
+        Build [N, Fg] matrix aligned with global contract node indices.
+        """
+        # infer N from mapping
+        if len(self.contract_to_idx) == 0:
+            raise RuntimeError("contract_to_idx is empty.")
+
+        num_contracts = max(self.contract_to_idx.values()) + 1
+
+        # infer feature dim from first sample
+        first_feat = self.all_samples[0]["contract_feature"]
+        if first_feat.dim() != 1:
+            raise ValueError(
+                f"contract_feature must be 1D, got shape {tuple(first_feat.shape)}"
+            )
+        global_feat_dim = first_feat.size(0)
+
+        global_features = torch.zeros(
+            (num_contracts, global_feat_dim),
+            dtype=torch.float32,
+        )
+
+        for sample in self.all_samples:
+            name = sample["contract_name"]
+            feat = sample["contract_feature"]
+
+            if feat.dim() != 1:
+                raise ValueError(
+                    f"contract_feature for '{name}' must be 1D, got {tuple(feat.shape)}"
+                )
+
+            idx = self.contract_to_idx.get(name, None)
+            if idx is None:
+                continue
+
+            global_features[idx] = feat
+
+        global_features = torch.nan_to_num(
+            global_features,
+            nan=0.0,
+            posinf=1e6,
+            neginf=-1e6,
+        )
 
         return global_features
 
-    # ----------------------------------------------------------------------
-    # Global graph loader
-    # ----------------------------------------------------------------------
-    def _load_global_edge_index(self) -> torch.Tensor:
-        """
-        Load full contract-level edge_index from .pt file.
+    # ------------------------------------------------------------------
+    # Split
+    # ------------------------------------------------------------------
+    def apply_split(self, samples: List[Dict]) -> List[Dict]:
+        if self.split == "all":
+            return samples
 
-        Supported cases:
-        - dict with keys like 'edge_index', 'edges', 'global_edge_index'
-        - tensor itself
-        - list/tuple containing edge_index
+        n = len(samples)
+        indices = list(range(n))
 
-        If unavailable, fallback to empty edge_index of shape [2, 0].
-        """
-        if self.contract_graph_path is None or not self.contract_graph_path.exists():
-            warnings.warn(
-                f"[HierarchicalDataset] contract_graph_path not found: {self.contract_graph_path}. "
-                f"Using empty global graph."
+        rng = random.Random(self.seed)
+        rng.shuffle(indices)
+
+        train_ratio, val_ratio, test_ratio = self.split_ratio
+        if not math.isclose(train_ratio + val_ratio + test_ratio, 1.0, rel_tol=1e-6):
+            raise ValueError(
+                f"split_ratio must sum to 1.0, got {self.split_ratio}"
             )
+
+        n_train = int(n * train_ratio)
+        n_val = int(n * val_ratio)
+
+        train_idx = indices[:n_train]
+        val_idx = indices[n_train:n_train + n_val]
+        test_idx = indices[n_train + n_val:]
+
+        if self.split == "train":
+            selected = train_idx
+        elif self.split == "val":
+            selected = val_idx
+        else:
+            selected = test_idx
+
+        return [samples[i] for i in selected]
+
+    # ------------------------------------------------------------------
+    # Feature dimension inference
+    # ------------------------------------------------------------------
+    def infer_feature_dims(self) -> Tuple[int, int, int]:
+        sample = self.samples[0]
+
+        local_graph = sample["local_graph"]
+        node_dim = local_graph.x.size(-1)
+
+        if local_graph.edge_attr is None:
+            edge_dim = 1
+        else:
+            edge_dim = local_graph.edge_attr.size(-1)
+
+        global_feat_dim = self.global_features.size(-1)
+
+        return node_dim, edge_dim, global_feat_dim
+
+    # ------------------------------------------------------------------
+    # Extractors
+    # ------------------------------------------------------------------
+    def _extract_contract_name(self, obj: Dict, json_path: Path) -> str:
+        for key in ["contract_name", "address", "contract", "name"]:
+            if key in obj and obj[key] is not None:
+                return str(obj[key])
+        return json_path.stem
+
+    def _extract_label(self, obj: Dict) -> int:
+        for key in ["label", "y", "target", "is_malicious", "fraud_label"]:
+            if key in obj:
+                value = obj[key]
+                if isinstance(value, bool):
+                    return int(value)
+                return int(value)
+        return 0
+
+    def _extract_node_features(self, obj: Dict, json_path: Path) -> torch.Tensor:
+        raw = None
+        for key in ["features", "node_features", "x"]:
+            if key in obj:
+                raw = obj[key]
+                break
+
+        if raw is None:
+            raise KeyError(f"No node feature key found in {json_path.name}")
+
+        x = to_safe_float_tensor(
+            raw,
+            clip_value=self.clip_value,
+            apply_signed_log=self.apply_signed_log,
+        )
+
+        if x.dim() != 2:
+            raise ValueError(
+                f"Node features in {json_path.name} must be 2D [num_nodes, node_dim], got {tuple(x.shape)}"
+            )
+
+        x = torch.nan_to_num(x, nan=0.0, posinf=1e6, neginf=-1e6)
+        return x
+
+    def _extract_edge_index(self, obj: Dict) -> torch.Tensor:
+        raw = None
+        for key in ["edges", "edge_index"]:
+            if key in obj:
+                raw = obj[key]
+                break
+
+        if raw is None or len(raw) == 0:
             return torch.empty((2, 0), dtype=torch.long)
 
-        obj = torch.load(self.contract_graph_path, map_location="cpu")
-        edge_index = self._extract_edge_index(obj)
+        edge_index = torch.as_tensor(raw, dtype=torch.long)
 
-        if edge_index is None:
-            warnings.warn(
-                f"[HierarchicalDataset] Could not parse edge_index from: {self.contract_graph_path}. "
-                f"Using empty global graph."
+        # allow both [E, 2] and [2, E]
+        if edge_index.dim() != 2:
+            raise ValueError(f"edge_index must be 2D, got shape {tuple(edge_index.shape)}")
+
+        if edge_index.size(0) == 2:
+            pass
+        elif edge_index.size(1) == 2:
+            edge_index = edge_index.t().contiguous()
+        else:
+            raise ValueError(
+                f"edge_index must have shape [2, E] or [E, 2], got {tuple(edge_index.shape)}"
             )
-            return torch.empty((2, 0), dtype=torch.long)
-
-        edge_index = edge_index.long().contiguous()
-
-        if edge_index.numel() > 0:
-            max_idx = int(edge_index.max().item())
-            if max_idx >= len(self.all_files):
-                warnings.warn(
-                    f"[HierarchicalDataset] global edge_index max node id={max_idx}, "
-                    f"but num_contracts={len(self.all_files)}. "
-                    f"Please verify that contract graph indexing matches sorted JSON filenames."
-                )
 
         return edge_index
 
-    def _extract_edge_index(self, obj) -> Optional[torch.Tensor]:
-        # Case 1: direct tensor
-        if torch.is_tensor(obj):
-            return self._normalize_edge_index(obj)
+    def _extract_edge_attr(self, obj: Dict, edge_index: torch.Tensor) -> torch.Tensor:
+        num_edges = edge_index.size(1)
 
-        # Case 2: dict
+        raw = None
+        for key in ["edge_attr", "edge_features"]:
+            if key in obj:
+                raw = obj[key]
+                break
+
+        if raw is None:
+            # synthesize constant edge feature
+            return torch.ones((num_edges, 1), dtype=torch.float32)
+
+        edge_attr = to_safe_float_tensor(
+            raw,
+            clip_value=self.clip_value,
+            apply_signed_log=self.apply_signed_log,
+        )
+
+        if edge_attr.dim() == 1:
+            edge_attr = edge_attr.unsqueeze(-1)
+
+        if edge_attr.dim() != 2:
+            raise ValueError(
+                f"edge_attr must be 2D [E, edge_dim], got {tuple(edge_attr.shape)}"
+            )
+
+        if edge_attr.size(0) != num_edges:
+            raise ValueError(
+                f"edge_attr row count mismatch: edge_attr has {edge_attr.size(0)} rows, "
+                f"but edge_index has {num_edges} edges"
+            )
+
+        edge_attr = torch.nan_to_num(edge_attr, nan=0.0, posinf=1e6, neginf=-1e6)
+        return edge_attr
+
+    def _extract_contract_feature(self, obj: Dict) -> torch.Tensor:
+        raw = None
+        for key in ["contract_feature", "contract_features", "global_features"]:
+            if key in obj:
+                raw = obj[key]
+                break
+
+        if raw is None:
+            raise KeyError(
+                "No contract-level feature key found. "
+                "Expected one of: contract_feature / contract_features / global_features"
+            )
+
+        feat = to_safe_float_tensor(
+            raw,
+            clip_value=self.clip_value,
+            apply_signed_log=self.apply_signed_log,
+        )
+
+        if feat.dim() == 2 and feat.size(0) == 1:
+            feat = feat.squeeze(0)
+
+        if feat.dim() != 1:
+            raise ValueError(
+                f"contract_feature must be 1D [Fg], got {tuple(feat.shape)}"
+            )
+
+        feat = torch.nan_to_num(feat, nan=0.0, posinf=1e6, neginf=-1e6)
+        return feat
+
+    def _extract_contract_mapping(self, obj) -> Dict[str, int]:
+        """
+        Try multiple common mapping formats.
+        """
+        # dict-style
         if isinstance(obj, dict):
-            for key in ["edge_index", "global_edge_index", "contract_edge_index", "edges"]:
-                if key in obj:
-                    return self._extract_edge_index(obj[key])
+            for key in ["contract_to_idx", "addr_to_idx", "name_to_idx"]:
+                if key in obj and isinstance(obj[key], dict):
+                    return {str(k): int(v) for k, v in obj[key].items()}
 
-        # Case 3: list/tuple
-        if isinstance(obj, (list, tuple)):
-            # direct edge list: [[u, v], ...]
-            if len(obj) > 0 and isinstance(obj[0], (list, tuple)) and len(obj[0]) == 2:
-                return self._normalize_edge_index(torch.tensor(obj, dtype=torch.long))
+            for key in ["contract_names", "node_names", "contracts"]:
+                if key in obj and isinstance(obj[key], (list, tuple)):
+                    return {str(name): i for i, name in enumerate(obj[key])}
 
-            for item in obj:
-                edge_index = self._extract_edge_index(item)
-                if edge_index is not None:
-                    return edge_index
+        # object-style
+        for key in ["contract_to_idx", "addr_to_idx", "name_to_idx"]:
+            if hasattr(obj, key):
+                mapping = getattr(obj, key)
+                if isinstance(mapping, dict):
+                    return {str(k): int(v) for k, v in mapping.items()}
 
-        return None
+        for key in ["contract_names", "node_names", "contracts"]:
+            if hasattr(obj, key):
+                names = getattr(obj, key)
+                if isinstance(names, (list, tuple)):
+                    return {str(name): i for i, name in enumerate(names)}
 
-    @staticmethod
-    def _normalize_edge_index(edge_index: torch.Tensor) -> Optional[torch.Tensor]:
-        if edge_index.dim() != 2:
-            return None
-
-        # Already [2, E]
-        if edge_index.size(0) == 2:
-            return edge_index.long()
-
-        # Possibly [E, 2]
-        if edge_index.size(1) == 2:
-            return edge_index.t().contiguous().long()
-
-        return None
-
-    # ----------------------------------------------------------------------
-    # Split logic
-    # ----------------------------------------------------------------------
-    def _build_split_indices(self) -> np.ndarray:
-        all_indices = np.arange(len(self.all_files))
-        all_labels = self.labels_all
-
-        if self.split == "all":
-            return all_indices
-
-        # First split: train vs temp(val+test)
-        train_size = self.train_ratio
-        temp_size = self.val_ratio + self.test_ratio
-
-        try:
-            train_idx, temp_idx, train_y, temp_y = train_test_split(
-                all_indices,
-                all_labels,
-                test_size=temp_size,
-                stratify=all_labels if self._can_stratify(all_labels) else None,
-                random_state=self.split_seed,
-            )
-        except Exception:
-            train_idx, temp_idx, train_y, temp_y = train_test_split(
-                all_indices,
-                all_labels,
-                test_size=temp_size,
-                stratify=None,
-                random_state=self.split_seed,
-            )
-
-        if self.split == "train":
-            return np.sort(train_idx)
-
-        # Second split: val vs test on temp
-        if len(temp_idx) == 0:
-            return np.array([], dtype=np.int64)
-
-        val_portion_in_temp = self.val_ratio / (self.val_ratio + self.test_ratio)
-
-        try:
-            val_idx, test_idx, _, _ = train_test_split(
-                temp_idx,
-                temp_y,
-                test_size=(1.0 - val_portion_in_temp),
-                stratify=temp_y if self._can_stratify(temp_y) else None,
-                random_state=self.split_seed,
-            )
-        except Exception:
-            val_idx, test_idx, _, _ = train_test_split(
-                temp_idx,
-                temp_y,
-                test_size=(1.0 - val_portion_in_temp),
-                stratify=None,
-                random_state=self.split_seed,
-            )
-
-        if self.split == "val":
-            return np.sort(val_idx)
-        if self.split == "test":
-            return np.sort(test_idx)
-
-        raise ValueError(f"Unexpected split: {self.split}")
-
-    @staticmethod
-    def _can_stratify(labels: np.ndarray) -> bool:
-        unique, counts = np.unique(labels, return_counts=True)
-        return len(unique) >= 2 and np.all(counts >= 2)
-
-    # ----------------------------------------------------------------------
-    # Local graph loader
-    # ----------------------------------------------------------------------
-    def _load_local_graph(self, json_path: Path) -> Data:
-        with open(json_path, "r") as f:
-            raw = json.load(f)
-
-        features = raw.get("features", [])
-        edges = raw.get("edges", [])
-
-        if len(features) == 0:
-            raise ValueError(f"Empty features in {json_path}")
-
-        x = torch.tensor(features, dtype=torch.float)  # [N, 4] in current raw GoG schema
-        num_nodes = x.size(0)
-
-        if len(edges) == 0:
-            edge_index = torch.empty((2, 0), dtype=torch.long)
-            edge_attr = torch.empty((0, 1), dtype=torch.float)
-        else:
-            edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()  # [2, E]
-
-            # MVP decision:
-            # raw JSON has no explicit edge feature, so we synthesize 1-dim constant edge_attr.
-            edge_attr = torch.ones((edge_index.size(1), 1), dtype=torch.float)
-
-        data = Data(
-            x=x,
-            edge_index=edge_index,
-            edge_attr=edge_attr,
-            num_nodes=num_nodes,
+        raise KeyError(
+            "Could not extract contract-name-to-index mapping from global graph file. "
+            "Expected one of: contract_to_idx / addr_to_idx / name_to_idx / contract_names / node_names"
         )
-
-        return data
-
-    # ----------------------------------------------------------------------
-    # Optional data perturbation hook for later phases
-    # ----------------------------------------------------------------------
-    @staticmethod
-    def _apply_edge_dropout(data: Data, p: float) -> Data:
-        if data.edge_index.numel() == 0:
-            return data
-
-        edge_index_dropped, edge_mask = dropout_edge(
-            data.edge_index,
-            p=p,
-            force_undirected=False,
-            training=True,
-        )
-
-        data.edge_index = edge_index_dropped
-
-        if getattr(data, "edge_attr", None) is not None and data.edge_attr.size(0) == edge_mask.size(0):
-            data.edge_attr = data.edge_attr[edge_mask]
-
-        return data
