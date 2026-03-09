@@ -11,6 +11,7 @@ sys.path.append(str(ROOT))
 from data.dataset import HierarchicalDataset
 from data.collate import hierarchical_collate_fn
 
+ 
 dataset = HierarchicalDataset(
     data_dir="../../_data/GoG/polygon/graphs",
     contract_graph_path="../../_data/GoG/polygon/polygon_hybrid_graph.pt",
@@ -18,18 +19,18 @@ dataset = HierarchicalDataset(
     split_seed=42,
     edge_dropout=0.0,
 )
-
+ 
 print(dataset.get_metadata())
-
+ 
 loader = DataLoader(
     dataset,
     batch_size=4,
     shuffle=True,
     collate_fn=hierarchical_collate_fn,
 )
-
+ 
 batch = next(iter(loader))
-
+ 
 print("local_batch.x.shape         =", batch["local_batch"].x.shape)
 print("local_batch.edge_index.shape=", batch["local_batch"].edge_index.shape)
 print("local_batch.edge_attr.shape =", batch["local_batch"].edge_attr.shape)
