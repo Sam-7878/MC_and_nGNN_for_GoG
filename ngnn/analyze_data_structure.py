@@ -63,7 +63,7 @@ def analyze_gog_structure(data_dir="../../_data/GoG/polygon/graphs"):
             
             contracts.add(data.get('Contract', 'unknown'))
             categories[data.get('Category', 'unknown')] += 1
-            node_counts.append(len(data.get('nodes', [])))
+            node_counts.append(len(data.get('features', [])))
             edge_counts.append(len(data.get('edges', [])))
         except:
             continue

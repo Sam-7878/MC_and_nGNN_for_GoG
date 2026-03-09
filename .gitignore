@@ -10,7 +10,6 @@ _res/
 lightning_logs/
 
 # Graph database files
-data/
 doc/
 GoG/    
 result/
