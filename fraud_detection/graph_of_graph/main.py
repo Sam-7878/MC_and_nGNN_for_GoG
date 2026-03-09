@@ -95,7 +95,9 @@ def read_json_worker(file_path):
     try:
         with open(file_path, 'r') as f:
             data = json.load(f)
-        return idx, data.get('contract_feature', []), data.get('label', 0)
+        feat = data.get('contract_feature', [])
+        label = data.get('label', 0)      # 0 or 1
+        return idx, feat, label
     except Exception as e:
         print(f"Error reading {file_path}: {e}")
         return idx, [], 0
@@ -116,14 +118,15 @@ def main():
     # CPU 코어의 2/3를 활용하되 최소 2개는 사용하도록 설정
     print(f"Loading features and labels from {num_nodes} JSON files...")
     
-    with multiprocessing.Pool(processes=n_workers) as pool:
-        # for idx, feat, label in tqdm(pool.imap_unordered(read_json_worker, json_files, chunksize=100), total=num_nodes, desc="JSON Parsing"):
-        for idx, feat, label in tqdm(pool.imap_unordered(read_json_worker, json_files, chunksize=40), total=num_nodes, desc="JSON Parsing"):
+    with multiprocessing.Pool(processes=args.workers) as pool:
+        for idx, feat, label in tqdm(
+                pool.imap_unordered(read_json_worker, json_files, chunksize=40),
+                total=num_nodes, desc="JSON Parsing"):
             x_list[idx] = feat
             y_list[idx] = label
             
-    x = torch.tensor(x_list, dtype=torch.float)
-    y = torch.tensor(y_list, dtype=torch.long)
+    features  = torch.tensor(x_list, dtype=torch.float)
+    labels = torch.tensor(y_list, dtype=torch.long)
     
     hierarchical_graph = hierarchical_graph_reader(f"../../_data/GoG/{chain}/edges/global_edges.csv")
     edge_index = torch.LongTensor(list(hierarchical_graph.edges)).t().contiguous()
@@ -133,7 +136,7 @@ def main():
     edge_index = torch.cat([edge_index, self_edge_index], dim=1)
     edge_index = coalesce(edge_index, num_nodes=num_nodes)
 
-    global_data = Data(x=x, edge_index=edge_index, y=y, num_nodes=num_nodes)
+    global_data = Data(x=features, edge_index=edge_index, y=labels, num_nodes=num_nodes)
     train_mask, val_mask, test_mask = create_masks(global_data.num_nodes)
     global_data.train_mask = train_mask
     global_data.val_mask = val_mask

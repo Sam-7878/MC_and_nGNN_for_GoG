@@ -2,7 +2,7 @@
 """
 Hierarchical Dataset for Graph-of-Graphs
 Combines local transaction graphs with global contract graph
-(CSV Logging Enabled)
+(MC Data-level Edge Dropout & CSV Logging Enabled)
 """
 
 import torch
@@ -12,15 +12,9 @@ import os
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
 from torch_geometric.data import Data, Batch
+from torch_geometric.utils import dropout_edge
 import argparse
 from datetime import datetime
-import warnings
-
-# 귀찮은 경고 숨김 처리
-warnings.filterwarnings("ignore", message=".*pyg-lib.*")
-warnings.filterwarnings("ignore", message=".*transductive only.*")
-warnings.filterwarnings("ignore", message=".*Backbone and num_layers.*")
-
 
 def hierarchical_collate_fn(batch_list):
     local_graphs = [sample['local_graph'] for sample in batch_list]
@@ -39,10 +33,11 @@ def hierarchical_collate_fn(batch_list):
         'global_labels': global_graph['labels']
     }
 
-class HierarchicalDataset(Dataset):
-    def __init__(self, data_dir, contract_graph_path, split='train'):
+class HierarchicalDatasetMC(Dataset):
+    def __init__(self, data_dir, contract_graph_path, split='train', mc_edge_dropout=0.1):
         self.data_dir = Path(data_dir)
         self.split = split
+        self.mc_edge_dropout = mc_edge_dropout
         self.contract_graph = torch.load(contract_graph_path)
         self.labels = self.contract_graph['labels']
         self._load_local_graphs()
@@ -56,7 +51,6 @@ class HierarchicalDataset(Dataset):
                 self.valid_contracts.append(contract_idx)
                 labels_list.append(self.labels[contract_idx].item())
         
-        # Split logic (Train 80%, Val 10%, Test 10%)
         np.random.seed(42)
         indices = np.random.permutation(len(self.valid_contracts))
         train_end = int(0.8 * len(indices))
@@ -78,6 +72,12 @@ class HierarchicalDataset(Dataset):
         contract_idx = self.split_contracts[idx]
         local_graph_path = self.data_dir / f"{contract_idx}.pt"
         local_graph = torch.load(local_graph_path)
+        
+        # 💡 Data-level Monte Carlo: 무작위 Edge Dropout 적용 (Train 시에만)
+        if self.split == 'train' and self.mc_edge_dropout > 0.0:
+            edge_index, _ = dropout_edge(local_graph.edge_index, p=self.mc_edge_dropout, training=True)
+            local_graph.edge_index = edge_index
+            
         label = self.labels[contract_idx].item()
         
         return {
@@ -90,26 +90,27 @@ class HierarchicalDataset(Dataset):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--chain', type=str, default='bsc')
+    parser.add_argument('--edge_dropout', type=float, default=0.15) # MC 적용 확률
     args = parser.parse_args()
     
     data_dir = f"../../_data/GoG/{args.chain}/local_graphs"
     contract_graph_path = f"../../_data/GoG/{args.chain}/{args.chain}_hybrid_graph.pt"
     
-    dataset = HierarchicalDataset(
+    dataset = HierarchicalDatasetMC(
         data_dir=data_dir,
         contract_graph_path=contract_graph_path,
-        split='train'
+        split='train',
+        mc_edge_dropout=args.edge_dropout
     )
     
-    # Calculate stats for CSV
     label_0 = sum(1 for c in dataset.valid_contracts if dataset.labels[c].item() == 0)
     label_1 = sum(1 for c in dataset.valid_contracts if dataset.labels[c].item() == 1)
     
-    sample = dataset[0]
+    sample = dataset[0] # Edge Dropout이 적용된 첫 번째 샘플 로드
     
     results = [{
         "Timestamp": datetime.now().strftime("%Y:%m:%d_%H:%M:%S"),
-        "Dataset Version": "Base (No MC)",
+        "Dataset Version": f"MC Edge Dropout (p={args.edge_dropout})",
         "Chain": args.chain,
         "Split": dataset.split,
         "Total Contracts loaded": len(dataset.valid_contracts),
@@ -117,12 +118,12 @@ if __name__ == "__main__":
         "Label 0 Count": label_0,
         "Label 1 Count": label_1,
         "Sample Local Nodes": sample['local_graph'].num_nodes,
-        "Sample Local Edges": sample['local_graph'].edge_index.shape[1]
+        "Sample Local Edges": sample['local_graph'].edge_index.shape[1] # MC로 인해 엣지가 줄어듦
     }]
     
     RESULT_PATH = f"../../_data/results/ngnn"
     os.makedirs(RESULT_PATH, exist_ok=True)
-    csv_file = f'{RESULT_PATH}/{args.chain}_dataset_stats_log.csv'
+    csv_file = f'{RESULT_PATH}/{args.chain}_mc_dataset_stats_log.csv'
     
     df = pd.DataFrame(results)
     if not os.path.exists(csv_file):
@@ -130,4 +131,4 @@ if __name__ == "__main__":
     else:
         df.to_csv(csv_file, mode='a', header=False, index=False)
         
-    print(f"✅ Saved Basic dataset statistics to {csv_file}")
+    print(f"✅ Saved MC applied dataset statistics to {csv_file}")

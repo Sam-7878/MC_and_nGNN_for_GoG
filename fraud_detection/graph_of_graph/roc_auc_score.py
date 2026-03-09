@@ -173,11 +173,11 @@ def main():
     global_data.test_mask = test_mask
 
     model_params = {
-        "DOMINANT": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
-        "DONE": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
-        "GAE": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
-        "AnomalyDAE": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01,  0.1] for e in [50, 100, 150]],
-        "CoLA": [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
+        "DOMINANT":     [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
+        "DONE":         [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
+        "GAE":          [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
+        "AnomalyDAE":   [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
+        "CoLA":         [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
     }
 
     MODEL_MAP = {
