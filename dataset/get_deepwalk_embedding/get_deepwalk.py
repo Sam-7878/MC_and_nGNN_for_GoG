@@ -131,18 +131,18 @@ def main():
     if args.workers > 0:
         num_cores = args.workers
     else:
-        num_cores = max(2, os.cpu_count() // 2)
+        num_cores = max(2, multiprocessing.cpu_count()//2)
         
     logging.info(f'Using {num_cores} cores for multiprocessing (Lazy Loading Mode).')
 
-    pool = multiprocessing.Pool(num_cores, maxtasksperchild=4)
+    pool = multiprocessing.Pool(num_cores, maxtasksperchild=12) # 워커가 12개의 작업을 처리한 후 재시작하도록 설정하여 메모리 누수 방지
     tasks = [(idx, args.embedding_dim, args.chain, args.seed) for idx in numbers]
     
     try:
         print(f"Processing {len(tasks)} graphs with embedding dimension {args.embedding_dim}...")
         
         # tqdm 적용
-        for _ in tqdm(pool.imap_unordered(worker_process, tasks, chunksize=4), total=len(tasks)):
+        for _ in tqdm(pool.imap_unordered(worker_process, tasks, chunksize=50), total=len(tasks)):
             pass 
             
     except Exception as e:

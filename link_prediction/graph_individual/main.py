@@ -14,7 +14,7 @@
 #     all_train_metrics = []
 #     all_test_metrics = []
 
-#     seeds = [42, 43, 44]
+#     seeds = [41, 42, 43, 44, 45, 46]
 #     for seed in seeds:
 #         torch.manual_seed(seed)
 #         np.random.seed(seed)
@@ -116,7 +116,7 @@ def train_test(model_class, args):
     all_train_metrics = []
     all_test_metrics = []
 
-    seeds = [42, 43, 44]
+    seeds = [41, 42, 43, 44, 45, 46]
     for seed in seeds:
         set_seed(seed)
         root_path = f'../../_data/GoG/edges/{args.chain}' 

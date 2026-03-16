@@ -312,7 +312,7 @@ def main():
     # -------------------------------------------------------------------------
     n_workers = (
         args.parallel_workers if args.parallel_workers > 0
-        else max(2, os.cpu_count() // 2)
+        else max(2, multiprocessing.cpu_count()//2)
     )
     contracts = labels_final['Contract'].tolist()
     tasks = [(c, chain_dir, f'{directory}/graphs') for c in contracts]

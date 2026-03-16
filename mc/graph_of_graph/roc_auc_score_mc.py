@@ -667,12 +667,8 @@ def main():
 
 
     # ── Hyperparameter Grid ────────────────────────────────────────────────
-    hyperparameters = [
-        {"hid_dim": d, "lr": lr, "epoch": e}
-        for d  in [8, 16, 32]
-        for lr in [0.005, 0.01, 0.1]
-        for e  in [50, 100, 150]
-    ]
+    hyperparameters = [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]]
+
 
     models = {
         'DOMINANT':   DOMINANT,

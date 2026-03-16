@@ -1,3 +1,5 @@
+import multiprocessing
+
 import pandas as pd
 import random
 import os
@@ -109,7 +111,7 @@ def main():
     tasks = [(chain, addr) for addr in chain_class]
     
     # ProcessPoolExecutor를 이용해 다중 CPU 코어 활용
-    with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
+    with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()//2) as executor:
         for result in executor.map(fetch_min_timestamp, tasks):
             if result is not None:
                 stats.append(result)

@@ -5,6 +5,8 @@ Description: Extract common nodes, analyze frequencies, and generate pairwise ed
 Features: Multiprocessing, Data Caching, C-optimized Counting, Memory-Safe Chunk Streaming
 """
 
+import multiprocessing
+
 import pandas as pd
 import argparse
 from pathlib import Path
@@ -84,7 +86,7 @@ def load_all_contract_nodes(data_dir: Path, chain: str, use_cache: bool = True) 
         return {}
         
     contract_nodes = {}
-    max_workers = max(1, os.cpu_count()//2)  
+    max_workers = max(1, multiprocessing.cpu_count()//2)  
     logger.info(f"Parsing CSV files using {max_workers} CPU cores...")
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:

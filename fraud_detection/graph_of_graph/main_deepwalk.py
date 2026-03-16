@@ -172,11 +172,11 @@ def main():
 
     # Parameters to test
     model_params = {
-        "DOMINANT":     [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
-        "DONE":         [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
-        "GAE":          [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
-        "AnomalyDAE":   [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
-        "CoLA":         [{"hid_dim": d, "lr": lr, "epoch": e} for d in [8, 16, 32] for lr in [0.005, 0.01, 0.1] for e in [50, 100, 150]],
+        "DOMINANT":     [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
+        "DONE":         [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
+        "GAE":          [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
+        "AnomalyDAE":   [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
+        "CoLA":         [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
     }
 
     # eval() 대신 안전한 모델 매핑 사용
@@ -277,7 +277,7 @@ def main():
                     "completed_tasks": list(completed_tasks)
                 }, f, indent=4)
 
-    seeds_for_evaluation = [42, 43, 44]
+    seeds_for_evaluation = [41, 42, 43, 44, 45, 46]
     for model_name, stats in best_model_params.items():
         param = stats['Params']
         detector = build_detector(model_name, param)

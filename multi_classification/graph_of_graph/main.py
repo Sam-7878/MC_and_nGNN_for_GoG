@@ -31,7 +31,7 @@ def main():
         for metric in ["precision", "recall", "f1_macro", "f1_micro"]
     }
 
-    for seed in [42, 43, 44]:  # different seeds
+    for seed in [41, 42, 43, 44, 45, 46]:  # different seeds
         print(seed)
         set_seed(seed)
 

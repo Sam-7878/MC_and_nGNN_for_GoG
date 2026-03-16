@@ -11,6 +11,7 @@ from scipy.stats import pearsonr
 import argparse
 import igraph as ig
 import sys
+import multiprocessing
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -181,7 +182,7 @@ if os.path.exists(cache_file):
 else:
     print("Computing tx counts in parallel (one-time)...")
     addrs = list(class_mapping.keys())
-    with ProcessPoolExecutor(max_workers=min(16, os.cpu_count() or 8)) as executor:
+    with ProcessPoolExecutor(max_workers=min(16, multiprocessing.cpu_count()//2 or 8)) as executor:
         futures = [executor.submit(count_tx, addr, chain_dir) for addr in tqdm(addrs, desc="Submit")]
         for future in tqdm(as_completed(futures), total=len(addrs), desc="Process"):
             addr, count = future.result()

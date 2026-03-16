@@ -48,7 +48,7 @@ class DeepWalk:
             window=5, 
             min_count=0, 
             sg=1, 
-            workers=1,  # 재현성을 위해 1로 설정 (속도는 느려짐). 속도가 중요하면 4로 하되 seed 고정
+            workers=12,  # 재현성을 위해 1로 설정 (속도는 느려짐). 속도가 중요하면 4로 하되 seed 고정
             seed=self.seed
         )
         return model

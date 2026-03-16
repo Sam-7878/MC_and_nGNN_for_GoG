@@ -126,7 +126,7 @@ def main():
                 for f in np.linspace(0.1, 0.3, 3)])  
     }
 
-    seeds = [42, 43, 44]
+    seeds = [41, 42, 43, 44, 45, 46]
     for model_name, (model, param_grid) in models.items():
         best_params = tune_and_find_best_params(model, param_grid, x_train, y_train, x_val, y_val)
         if best_params:

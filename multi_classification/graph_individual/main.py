@@ -38,7 +38,7 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.device)
 
-    seeds = [42, 43, 44]
+    seeds = [41, 42, 43, 44, 45, 46]
     metrics = {'train': [], 'test': []}
 
     for seed in seeds:

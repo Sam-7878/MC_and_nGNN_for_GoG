@@ -14,7 +14,7 @@ def verify_mc_dropout():
     y[:5]      = 1
     data = Data(x=x, edge_index=edge_index, y=y)
 
-    detector = DOMINANT(hid_dim=16, lr=0.01, epoch=20, gpu=-1)
+    detector = DOMINANT(hid_dim=8, lr=0.01, epoch=30, gpu=-1)
     detector.fit(data)
 
     print("📌 방법 A: 기존 방식 (decision_function 직접 호출)")

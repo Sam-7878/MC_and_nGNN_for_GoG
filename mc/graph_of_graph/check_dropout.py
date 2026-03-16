@@ -9,7 +9,7 @@ def inspect_model_dropout(model_name, model_class):
     print(f"🔍 {model_name} 구조 분석")
     print(f"{'='*60}")
 
-    detector = model_class(hid_dim=16, lr=0.01, epoch=5, gpu=-1)
+    detector = model_class(hid_dim=8, lr=0.01, epoch=5, gpu=-1)
 
     # dummy data로 fit (구조 초기화 필요)
     x = torch.randn(50, 7)
