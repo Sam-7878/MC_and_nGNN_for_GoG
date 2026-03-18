@@ -3,10 +3,10 @@ import numpy as np
 from gensim.models import Word2Vec
 
 class DeepWalk:
-    def __init__(self, graph, walk_length, num_walks, embedding_dim, seed=42):
+    def __init__(self, graph, walk_length, num_workers, embedding_dim, seed=42):
         self.graph = graph
         self.walk_length = walk_length
-        self.num_walks = num_walks
+        self.num_workers = num_workers
         self.embedding_dim = embedding_dim
         self.seed = seed  # Seed 추가
 
@@ -32,7 +32,7 @@ class DeepWalk:
         random.seed(self.seed)
         np.random.seed(self.seed)
         
-        for _ in range(self.num_walks):
+        for _ in range(self.num_workers):
             random.shuffle(nodes) # 노드 순서 섞기 제어
             for node in nodes:
                 walks.append(self.random_walk(node))

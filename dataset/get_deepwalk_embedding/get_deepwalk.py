@@ -44,22 +44,22 @@ def process_graph(idx, edges, embedding_dim, seed, save_dir):
 
     # 거대 그래프 메모리 폭발 방지 (동적 파라미터 스케일링)
     walk_length = 20
-    num_walks = 40
+    num_workers = 40
     
     if num_nodes > 100000:
         walk_length = 5
-        num_walks = 2
+        num_workers = 2
         logging.warning(f"Graph {idx} is MASSIVE ({num_nodes} nodes). Drastically reducing walks to prevent OOM.")
     elif num_nodes > 30000:
         walk_length = 10
-        num_walks = 5
+        num_workers = 5
         logging.warning(f"Graph {idx} is HUGE ({num_nodes} nodes). Reducing walks to prevent OOM.")
     elif num_nodes > 10000:
         walk_length = 10
-        num_walks = 10
+        num_workers = 10
     
     try:
-        deepwalk = DeepWalk(G, walk_length=walk_length, num_walks=num_walks, embedding_dim=embedding_dim, seed=current_seed)
+        deepwalk = DeepWalk(G, walk_length=walk_length, num_workers=num_workers, embedding_dim=embedding_dim, seed=current_seed)
         walks = deepwalk.generate_walks()
         
         if not walks:
