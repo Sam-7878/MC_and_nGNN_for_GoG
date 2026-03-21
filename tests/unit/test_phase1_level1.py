@@ -5,13 +5,13 @@ from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 
 
-import sys
-from pathlib import Path
+# import sys
+# from pathlib import Path
 
-# 프로젝트 루트를 PYTHONPATH에 추가 (common 모듈 로드용)
-ROOT = Path(__file__).resolve().parent.parent / 'src'
-# ROOT = Path(__file__).resolve().parent
-sys.path.append(str(ROOT))
+# # 프로젝트 루트를 PYTHONPATH에 추가 (common 모듈 로드용)
+# ROOT = Path(__file__).resolve().parent.parent / 'src'
+# # ROOT = Path(__file__).resolve().parent
+# sys.path.append(str(ROOT))
 
 from gog_fraud.common.types import Level1EmbeddingBundle, Level1Output
 from gog_fraud.models.level1.model import Level1Model, Level1ModelConfig
