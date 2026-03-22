@@ -45,22 +45,22 @@ class DatasetConfig:
     transactions_root: str = "../_data/dataset/transactions"
     labels_path: str = "../_data/dataset/labels.csv"
     global_graph_root: str = "../_data/dataset/global_graph"
-
-    # 전처리 캐시 경로 (None이면 transactions_root 옆 cache/graphs 사용)
-    cache_root: Optional[str] = "../_data/dataset/.cache/graphs"
-
+ 
+    # None이면 TransactionLoader가 자동으로 transactions_root 옆에 결정
+    cache_root: Optional[str] = None
+ 
     chain: str = "polygon"
     auto_split: bool = True
     train_ratio: float = 0.7
     val_ratio: float = 0.15
     split_seed: int = 42
     normalize_address: bool = True
-
+ 
     label_chain_col: Optional[str] = "Chain"
     label_address_col: Optional[str] = "Contract"
     label_label_col: Optional[str] = "Category"
     label_split_col: Optional[str] = None
-
+ 
     normal_categories: List[int] = field(default_factory=lambda: [0])
     fraud_categories: Optional[List[int]] = None
     load_global_graph: bool = False
@@ -81,10 +81,12 @@ class FraudDataset:
     def __init__(self, cfg: DatasetConfig) -> None:
         self.cfg = cfg
 
+        # ✅ 수정: cache_root 명시 전달
         self._tx_loader = TransactionLoader(
-            root=cfg.transactions_root,
-            chain=cfg.chain,
-            verbose=True,
+            root=self.cfg.transactions_root,
+            chain=self.cfg.chain,
+            cache_root=self.cfg.cache_root,   # ← 이 줄이 핵심
+            chunk_size=100,
         )
         
         self._lbl_loader = LabelLoader(

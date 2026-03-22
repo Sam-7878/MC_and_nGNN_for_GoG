@@ -26,8 +26,10 @@ class TransactionGraph:
 
 class TransactionLoader:
     """
-    Graph cache (pickle) 우선 로드.
-    cache가 없으면 RuntimeError 를 발생시켜 build_graph_cache.py 실행을 유도.
+    Chunk-based pickle cache 우선 로드.
+
+    cache가 없으면 RuntimeError를 발생시켜
+    build_graph_cache.py 실행을 유도합니다.
     """
 
     def __init__(
@@ -35,32 +37,52 @@ class TransactionLoader:
         root: str,
         chain: str,
         cache_root: Optional[str] = None,
-        supported_extensions: Tuple[str, ...] = (".csv",),
+        chunk_size: int = 100,
         verbose: bool = True,
     ) -> None:
-        self.root = Path(root)
+        self.root = Path(root).resolve()
         self.chain = chain
-        self.chain_dir = self.root / chain
-        self.exts = supported_extensions
         self.verbose = verbose
 
-        # cache_root가 없으면 root 옆에 cache/ 폴더 사용
-        resolved_cache = cache_root or str(self.root.parent / "cache" / "graphs")
-        self.store = GraphCacheStore(cache_root=resolved_cache, chain=chain)
+        # ---------------------------------------------------------------
+        # 경로 결정 순서:
+        #   1. 명시적으로 cache_root가 전달된 경우 → 그대로 resolve()
+        #   2. None인 경우 → transactions root 옆에 .cache/graphs/ 사용
+        # ---------------------------------------------------------------
+        if cache_root is not None:
+            resolved_cache = Path(cache_root).resolve()
+        else:
+            resolved_cache = self.root.parent / ".cache" / "graphs"
+            resolved_cache = resolved_cache.resolve()
+
+        self.store = GraphCacheStore(
+            cache_root=str(resolved_cache),
+            chain=chain,
+            chunk_size=chunk_size,
+        )
+
+        log.debug(
+            f"[TransactionLoader] cache_dir resolved → {self.store.cache_dir}"
+        )
 
     def load_all(self) -> List[TransactionGraph]:
-        if self.store.exists():
-            log.info(f"[TransactionLoader] Loading from pickle cache: {self.store.cache_dir}")
-            return self._load_from_cache()
-        else:
+        if not self.store.exists():
+            # 친절한 에러 메시지 (절대 경로로 표시)
             raise RuntimeError(
-                f"Graph cache not found for chain={self.chain}.\n"
-                f"Please run the preprocessing script first:\n\n"
+                f"\n"
+                f"[TransactionLoader] Graph cache not found.\n"
+                f"  Expected index : {self.store.cache_dir / '_index.pkl'}\n\n"
+                f"Please build the cache first:\n\n"
                 f"  PYTHONPATH=./src python -m gog_fraud.data.scripts.build_graph_cache \\\n"
                 f"    --transactions_root {self.root} \\\n"
-                f"    --cache_root {self.store.cache_dir.parent} \\\n"
-                f"    --chain {self.chain}\n"
+                f"    --cache_root        {self.store.cache_dir.parent} \\\n"
+                f"    --chain             {self.chain}\n"
             )
+
+        log.info(
+            f"[TransactionLoader] Loading from chunk cache: {self.store.cache_dir}"
+        )
+        return self._load_from_cache()
 
     def _load_from_cache(self) -> List[TransactionGraph]:
         cached = self.store.load_all()
@@ -79,10 +101,12 @@ class TransactionLoader:
                     )
                 )
             except Exception as exc:
-                log.warning(f"[TransactionLoader] Skip {ctg.contract_id} (cache): {exc}")
+                log.warning(
+                    f"[TransactionLoader] Skip {ctg.contract_id} (cache integrity): {exc}"
+                )
 
         log.info(
-            f"[TransactionLoader] Loaded {len(results)} graphs from cache "
+            f"[TransactionLoader] Ready: {len(results)} graphs "
             f"for chain={self.chain}"
         )
         return results
@@ -94,5 +118,8 @@ class TransactionLoader:
         if torch.isnan(graph.x).any() or torch.isinf(graph.x).any():
             raise ValueError("graph.x contains NaN/Inf")
         if getattr(graph, "edge_attr", None) is not None:
-            if torch.isnan(graph.edge_attr).any() or torch.isinf(graph.edge_attr).any():
+            if (
+                torch.isnan(graph.edge_attr).any()
+                or torch.isinf(graph.edge_attr).any()
+            ):
                 raise ValueError("edge_attr contains NaN/Inf")
