@@ -436,9 +436,10 @@ class LearnedFusion(BaseFusion):
     """
 
     def __init__(self, cfg: LearnedFusionConfig, device: Optional[str] = None):
-        self.cfg    = cfg
+        self.cfg = cfg
         self.device = device or "cpu"
-        self.net    = LearnedFusionNet(cfg).to(self.device)
+        self.net = LearnedFusionNet(cfg).to(self.device)
+        self.net.eval() ## 기본적으로 eval 모드로 시작
 
     def _combine(self, fusion_input: FusionInput) -> torch.Tensor:
         device = next(self.net.parameters()).device
@@ -544,18 +545,15 @@ def _safe_div(n: float, d: float) -> float:
 
 
 def compute_fusion_metrics(
-    output:    FusionOutput,
+    output: FusionOutput,
     threshold: float = 0.5,
 ) -> Dict[str, float]:
-    """
-    FusionOutput에 label이 있을 때 metric을 계산합니다.
-    """
     if output.label is None:
         raise ValueError("FusionOutput.label is required for metric computation")
 
-    y_true  = output.label.view(-1).float()
-    y_score = output.score.view(-1).float()
-    y_pred  = (y_score >= threshold).long()
+    y_true = output.label.view(-1).float().detach().cpu()
+    y_score = output.score.view(-1).float().detach().cpu()
+    y_pred = (y_score >= threshold).long()
     y_t_long = y_true.long()
 
     tp = int(((y_pred == 1) & (y_t_long == 1)).sum().item())
@@ -563,45 +561,59 @@ def compute_fusion_metrics(
     fp = int(((y_pred == 1) & (y_t_long == 0)).sum().item())
     fn = int(((y_pred == 0) & (y_t_long == 1)).sum().item())
 
-    precision   = _safe_div(tp, tp + fp)
-    recall      = _safe_div(tp, tp + fn)
+    precision = _safe_div(tp, tp + fp)
+    recall = _safe_div(tp, tp + fn)
     specificity = _safe_div(tn, tn + fp)
-    accuracy    = _safe_div(tp + tn, len(y_true))
-    f1          = _safe_div(2 * precision * recall, precision + recall)
+    accuracy = _safe_div(tp + tn, len(y_true))
+    f1 = _safe_div(2 * precision * recall, precision + recall)
 
     roc_auc = 0.0
-    pr_auc  = 0.0
-    bce     = 0.0
+    pr_auc = 0.0
+    bce = float(
+        F.binary_cross_entropy(
+            y_score.clamp(1e-6, 1 - 1e-6),
+            y_true,
+        ).item()
+    )
 
-    try:
-        from sklearn.metrics import average_precision_score, roc_auc_score
-        roc_auc = float(roc_auc_score(y_true.numpy(), y_score.numpy()))
-        pr_auc  = float(average_precision_score(y_true.numpy(), y_score.numpy()))
-    except Exception:
-        pass
+    unique_classes = torch.unique(y_t_long)
 
-    try:
-        bce = float(
-            F.binary_cross_entropy(
-                y_score.clamp(1e-6, 1 - 1e-6),
-                y_true,
-            ).item()
-        )
-    except Exception:
-        pass
+    # ROC AUC: 두 클래스가 모두 있어야 정의 가능
+    ## sklearn.metrics.roc_auc_score은 양성/음성 클래스가 모두 존재하지 않으면 ValueError를 발생시키므로, 사전에 체크하여 예외 처리합니다.
+    if unique_classes.numel() >= 2:
+        try:
+            from sklearn.metrics import roc_auc_score
+            roc_auc = float(roc_auc_score(y_true.numpy(), y_score.numpy()))
+        except Exception:
+            roc_auc = 0.0
+
+    # PR AUC: positive class가 하나 이상 있어야 의미 있음
+    ## sklearn.metrics.average_precision_score은 양성 클래스가 하나도 없으면 ValueError를 발생시키므로, 사전에 체크하여 예외 처리합니다.
+    if int((y_t_long == 1).sum().item()) > 0:
+        try:
+            from sklearn.metrics import average_precision_score
+            pr_auc = float(average_precision_score(y_true.numpy(), y_score.numpy()))
+        except Exception:
+            pr_auc = 0.0
 
     return {
-        "threshold":    threshold,
-        "accuracy":     accuracy,
-        "precision":    precision,
-        "recall":       recall,
-        "specificity":  specificity,
-        "f1":           f1,
-        "roc_auc":      roc_auc,
-        "pr_auc":       pr_auc,
-        "bce_loss":     bce,
-        "tp": tp, "tn": tn, "fp": fp, "fn": fn,
+        "threshold": threshold,
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "specificity": specificity,
+        "f1": f1,
+        "roc_auc": roc_auc,
+        "pr_auc": pr_auc,
+        "bce_loss": bce,
+        "tp": tp,
+        "tn": tn,
+        "fp": fp,
+        "fn": fn,
     }
+
+
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
