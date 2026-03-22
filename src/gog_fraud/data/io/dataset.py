@@ -30,6 +30,9 @@ from .global_graph_loader import GlobalGraphData, GlobalGraphLoader
 from .label_loader import LabelLoader, LabelRecord
 from .transaction_loader import TransactionGraph, TransactionLoader
 
+from typing import Optional, List
+from dataclasses import dataclass, field
+
 log = logging.getLogger(__name__)
 
 
@@ -37,36 +40,31 @@ log = logging.getLogger(__name__)
 # 설정
 # ---------------------------------------------------------------------------
 
-# src/gog_fraud/data/io/dataset.py
-
-from typing import Optional, List
-from dataclasses import dataclass, field
-
 @dataclass
 class DatasetConfig:
     transactions_root: str = "../_data/dataset/transactions"
     labels_path: str = "../_data/dataset/labels.csv"
     global_graph_root: str = "../_data/dataset/global_graph"
-    chain: str = "polygon"
 
+    # 전처리 캐시 경로 (None이면 transactions_root 옆 cache/graphs 사용)
+    cache_root: Optional[str] = "../_data/dataset/.cache/graphs"
+
+    chain: str = "polygon"
     auto_split: bool = True
     train_ratio: float = 0.7
     val_ratio: float = 0.15
     split_seed: int = 42
     normalize_address: bool = True
 
-    # labels.csv schema
     label_chain_col: Optional[str] = "Chain"
     label_address_col: Optional[str] = "Contract"
     label_label_col: Optional[str] = "Category"
     label_split_col: Optional[str] = None
 
-    # category -> binary label
     normal_categories: List[int] = field(default_factory=lambda: [0])
     fraud_categories: Optional[List[int]] = None
-
-    # strict 모드에서는 False 권장
     load_global_graph: bool = False
+
 
 
 
