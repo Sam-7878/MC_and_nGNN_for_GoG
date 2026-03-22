@@ -16,7 +16,7 @@ def hierarchical_graph_reader(path):
 
 class GraphDatasetGenerator(object):
     def __init__(self, path):
-        self.df = pd.read_csv(path)
+        self.df = pd.read_csv(path, low_memory=False)
         self.number_of_features = 7 
         self._create_target()
 

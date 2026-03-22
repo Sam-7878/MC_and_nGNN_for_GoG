@@ -104,6 +104,7 @@ class FraudDataset:
         self._gg_loader = GlobalGraphLoader(
             root=cfg.global_graph_root,
             normalize_address=cfg.normalize_address,
+            chain=cfg.chain,
         )
 
         # 로드 후 채워지는 필드

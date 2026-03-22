@@ -44,6 +44,27 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+## ---------------------------------------------------------------------------
+## Graph 수 제한 (디버그용)
+## ---------------------------------------------------------------------------
+def _maybe_limit_graphs(graphs, cfg, split_name: str):
+    debug_cfg = cfg.get("debug", {}) or {}
+    if not debug_cfg.get("enabled", False):
+        return graphs
+ 
+    limit = debug_cfg.get(f"max_{split_name}_graphs")
+    if limit is None:
+        return graphs
+ 
+    limit = int(limit)
+    if limit < len(graphs):
+        log.info(
+            f"[Benchmark] Smoke mode: limiting {split_name} graphs "
+            f"from {len(graphs)} to {limit}"
+        )
+        return graphs[:limit]
+    return graphs
+
 # ---------------------------------------------------------------------------
 # 설정 구조
 # ---------------------------------------------------------------------------
@@ -78,7 +99,14 @@ def run_legacy_baselines(
         lr              = legacy_cfg.get("lr", 0.003),
     )
 
+    train_graphs = dataset.split_graphs("train")
+    val_graphs = dataset.split_graphs("val")
     test_graphs = dataset.split_graphs("test")
+
+    train_graphs = _maybe_limit_graphs(train_graphs, cfg, "train")
+    val_graphs = _maybe_limit_graphs(val_graphs, cfg, "val")
+    test_graphs = _maybe_limit_graphs(test_graphs, cfg, "test")
+
     if not test_graphs:
         log.warning("[Legacy] No test graphs found!")
         return

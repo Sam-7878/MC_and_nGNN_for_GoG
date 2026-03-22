@@ -29,6 +29,49 @@ AggMethod = Literal["max", "mean", "sum", "topk"]
 SUPPORTED_MODELS = ("DOMINANT", "DONE", "GAE", "AnomalyDAE", "CoLA")
 
 
+# src/gog_fraud/adapters/legacy_adapter.py
+
+from torch_geometric.data import Data
+import torch
+
+
+def _sanitize_pyg_graph(graph: Data) -> Data:
+    """
+    pygod에 넘기기 전에 Data를 tensor-only 형태로 정리한다.
+    """
+    if getattr(graph, "x", None) is None:
+        raise ValueError("Graph.x is missing")
+
+    x = graph.x
+    edge_index = graph.edge_index
+    edge_attr = getattr(graph, "edge_attr", None)
+
+    if not torch.is_tensor(x):
+        x = torch.tensor(x, dtype=torch.float)
+    else:
+        x = x.detach().cpu().float()
+
+    if not torch.is_tensor(edge_index):
+        edge_index = torch.tensor(edge_index, dtype=torch.long)
+    else:
+        edge_index = edge_index.detach().cpu().long()
+
+    if edge_attr is not None:
+        if not torch.is_tensor(edge_attr):
+            edge_attr = torch.tensor(edge_attr, dtype=torch.float)
+        else:
+            edge_attr = edge_attr.detach().cpu().float()
+
+    clean = Data(
+        x=x.contiguous(),
+        edge_index=edge_index.contiguous(),
+        edge_attr=edge_attr.contiguous() if edge_attr is not None else None,
+        num_nodes=int(x.size(0)),
+    )
+    return clean
+
+
+
 # ---------------------------------------------------------------------------
 # 설정
 # ---------------------------------------------------------------------------
@@ -196,18 +239,18 @@ class LegacyModelRunner:
         return contract_scores
 
     def _run_single(self, graph: Data) -> float:
-        """단일 그래프에 대해 node score 추출 → 집계."""
-        model = self._build_model()   # 매번 새 모델 (그래프마다 독립 학습)
+        model = self._build_model()
 
-        # pygod는 torch_geometric Data를 직접 입력받음
-        model.fit(graph)
-        node_scores = model.decision_score_   # np.ndarray shape (N,)
+        clean_graph = _sanitize_pyg_graph(graph)
+        model.fit(clean_graph)
 
+        node_scores = model.decision_score_
         return _aggregate_scores(
             node_scores,
             method=self.cfg.agg_method,
             topk=self.cfg.topk,
         )
+
 
 
 # ---------------------------------------------------------------------------

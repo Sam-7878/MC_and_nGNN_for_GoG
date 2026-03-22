@@ -49,7 +49,7 @@ legacy:
   gpu             : 0
   hid_dim         : 16
   num_layers      : 2
-  epoch           : 100
+  epoch           : 50
   lr              : 0.003
 
 # ── Revision Level1 설정 ────────────────────────────────
@@ -58,6 +58,6 @@ level1:
   num_layers  : 2
   dropout     : 0.1
   lr          : 0.001
-  epochs      : 100
+  epochs      : 50
   batch_size  : 32
   device      : "cpu"

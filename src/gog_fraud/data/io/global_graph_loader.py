@@ -96,25 +96,65 @@ class GlobalGraphLoader:
     sub = gd.contract_subgraph(["0xabc"])   # Level2 입력용 subgraph
     """
 
-    def __init__(
-        self,
-        root: str,
-        normalize_address: bool = True,
-    ) -> None:
+    def __init__(self, root: str, chain: str, normalize_address: bool = True):
         self.root = Path(root)
-        self.normalize = normalize_address
-
-        if not self.root.exists():
-            raise FileNotFoundError(
-                f"global_graph directory not found: {self.root}"
-            )
-
-        self._cache: Optional[GlobalGraphData] = None
-
-    def load(self) -> GlobalGraphData:
-        if self._cache is None:
-            self._cache = self._load()
-        return self._cache
+        self.chain = chain
+        self.normalize_address = normalize_address
+ 
+    def load(self):
+        mapping_path = self.root / f"{self.chain}_contract_to_number_mapping.json"
+        graph_path = self.root / f"{self.chain}_graph_more_than_1_ratio.csv"
+ 
+        if not mapping_path.exists():
+            raise FileNotFoundError(f"Mapping not found: {mapping_path}")
+        if not graph_path.exists():
+            raise FileNotFoundError(f"Graph CSV not found: {graph_path}")
+ 
+        with open(mapping_path, "r", encoding="utf-8") as f:
+            contract_to_number = json.load(f)
+ 
+        if self.normalize_address:
+            contract_to_number = {
+                str(k).lower(): int(v)
+                for k, v in contract_to_number.items()
+            }
+        else:
+            contract_to_number = {
+                str(k): int(v)
+                for k, v in contract_to_number.items()
+            }
+ 
+        number_to_contract = {v: k for k, v in contract_to_number.items()}
+ 
+        df = pd.read_csv(graph_path)
+        df.columns = [str(c).strip().lower() for c in df.columns]
+ 
+        src = df["contract1"].astype(int).tolist()
+        dst = df["contract2"].astype(int).tolist()
+        weight = torch.tensor(
+            df["weight"].astype(float).values,
+            dtype=torch.float
+        ).unsqueeze(-1)
+ 
+        edge_index = torch.tensor([src, dst], dtype=torch.long)
+ 
+        max_idx = max(max(src), max(dst))
+        contract_ids = [number_to_contract.get(i, str(i)) for i in range(max_idx + 1)]
+ 
+        graph = Data(
+            edge_index=edge_index,
+            edge_attr=weight,
+            num_nodes=len(contract_ids),
+        )
+ 
+        return {
+            "graph": graph,
+            "contract_ids": contract_ids,
+            "id_to_idx": {cid: i for i, cid in enumerate(contract_ids)},
+            "contract_to_number": contract_to_number,
+            "number_to_contract": number_to_contract,
+        }
+ 
 
     # ------------------------------------------------------------------
     # Internal
