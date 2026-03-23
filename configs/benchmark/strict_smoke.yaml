@@ -2,6 +2,7 @@ setting: "strict"
 
 dataset:
   transactions_root: "../_data/dataset/transactions"
+  cache_root: "../_data/dataset/.cache/graphs"
   labels_path: "../_data/dataset/labels.csv"
   global_graph_root: "../_data/dataset/global_graph"
   chain: "polygon"
@@ -17,11 +18,12 @@ dataset:
   label_label_col: "Category"
   label_split_col: null
 
-  # 가정: Category == 0 이 normal, 그 외는 fraud
   normal_categories: [0]
   fraud_categories: null
 
   load_global_graph: false
+  chunk_size: 100
+
 
 legacy:
   models: ["DOMINANT"]

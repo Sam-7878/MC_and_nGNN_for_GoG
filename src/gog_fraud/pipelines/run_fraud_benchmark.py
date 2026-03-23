@@ -16,107 +16,168 @@ from gog_fraud.adapters.legacy_adapter import LegacyAdapterConfig, LegacyBatchRu
 from gog_fraud.data.io.dataset import FraudDataset
 from gog_fraud.evaluation.benchmark import BenchmarkTable, evaluate_benchmark
 from gog_fraud.models.level1.model import Level1Model
+from gog_fraud.models.level2.model import Level2Model
 from gog_fraud.training.loops.level1 import Level1Trainer
+from gog_fraud.training.loops.level2 import Level2Trainer
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+
+
 log = logging.getLogger(__name__)
 
 
-
-def _call_level1_trainer_fit(trainer, train_graphs, valid_graphs=None, label_dict=None):
-    last_exc = None
-
-    variants = [
-        dict(train_graphs=train_graphs, valid_graphs=valid_graphs, label_dict=label_dict),
-        dict(train_graphs=train_graphs, valid_graphs=valid_graphs, labels=label_dict),
-        dict(graphs=train_graphs, valid_graphs=valid_graphs, label_dict=label_dict),
-        dict(graphs=train_graphs, valid_graphs=valid_graphs, labels=label_dict),
-        dict(train_data=train_graphs, valid_graphs=valid_graphs, label_dict=label_dict),
-        dict(data=train_graphs, valid_graphs=valid_graphs, label_dict=label_dict),
-    ]
-
-    for kw in variants:
-        try:
-            return trainer.fit(**kw)
-        except TypeError as exc:
-            last_exc = exc
-
+def _safe_len(obj: Any) -> Optional[int]:
     try:
-        return trainer.fit(train_graphs, valid_graphs, label_dict)
-    except TypeError as exc:
-        last_exc = exc
+        return len(obj)
+    except Exception:
+        return None
 
-    raise TypeError(
-        f"Level1Trainer.fit 호출 호환 실패: {last_exc}"
+
+def _is_empty(obj: Any) -> bool:
+    n = _safe_len(obj)
+    return n == 0
+
+
+def _is_none_or_empty(obj: Any) -> bool:
+    return obj is None or _is_empty(obj)
+
+
+def _get_dataset_attr(dataset, *names, default=None):
+    for name in names:
+        if hasattr(dataset, name):
+            value = getattr(dataset, name)
+            if value is not None:
+                return value
+    return default
+
+
+def _normalize_graph_splits(dataset):
+    train_graphs = _get_dataset_attr(dataset, "train_graphs", "train", default=[])
+    valid_graphs = _get_dataset_attr(dataset, "valid_graphs", "val_graphs", "valid", "val", default=None)
+    test_graphs = _get_dataset_attr(dataset, "test_graphs", "test", default=[])
+    labels = _get_dataset_attr(dataset, "labels", "label_dict", default=None)
+    global_graph = _get_dataset_attr(dataset, "global_graph", default=None)
+
+    if _is_empty(valid_graphs):
+        valid_graphs = None
+
+    return train_graphs, valid_graphs, test_graphs, labels, global_graph
+
+
+def _record_skip(table, model_name: str, reason: str, setting: str):
+    log.warning("[%s] Skipping: %s", model_name, reason)
+    try:
+        if isinstance(table, list):
+            table.append({
+                "setting": setting,
+                "model": model_name,
+                "status": "skipped",
+                "reason": reason,
+            })
+    except Exception:
+        pass
+
+
+
+
+def _call_level1_trainer_fit(
+    trainer,
+    *,
+    train_graphs=None,
+    valid_graphs=None,
+    labels=None,
+    train_loader=None,
+    valid_loader=None,
+    loader_builder=None,
+    **kwargs,
+):
+    if _is_none_or_empty(train_loader) and _is_none_or_empty(train_graphs):
+        log.warning("[Revision L1] Empty training split. trainer.fit() skipped.")
+        return {
+            "history": [],
+            "best_score": None,
+            "best_metric": None,
+            "best_mode": None,
+            "epochs_ran": 0,
+            "skipped": True,
+            "reason": "empty_train_graphs",
+        }
+
+    if valid_loader is not None and _is_empty(valid_loader):
+        valid_loader = None
+    if valid_graphs is not None and _is_empty(valid_graphs):
+        valid_graphs = None
+
+    return trainer.fit(
+        train_graphs=train_graphs,
+        valid_graphs=valid_graphs,
+        label_dict=labels,
+        train_loader=train_loader,
+        valid_loader=valid_loader,
+        loader_builder=loader_builder,
+        **kwargs,
     )
+
 
 
 def _call_level2_trainer_fit(
     trainer,
-    l1_model,
-    global_graph,
-    train_ids,
+    *,
+    l1_model=None,
+    global_graph=None,
+    train_ids=None,
     valid_ids=None,
-    label_dict=None,
+    labels=None,
+    train_loader=None,
+    valid_loader=None,
+    loader_builder=None,
+    **kwargs,
 ):
-    last_exc = None
+    if global_graph is None:
+        log.warning("[Revision L2] global_graph is None. trainer.fit() skipped.")
+        return {
+            "history": [],
+            "best_score": None,
+            "best_metric": None,
+            "best_mode": None,
+            "epochs_ran": 0,
+            "skipped": True,
+            "reason": "global_graph_is_none",
+        }
 
-    variants = [
-        dict(
-            l1_model=l1_model,
-            global_graph=global_graph,
-            train_ids=train_ids,
-            valid_ids=valid_ids,
-            label_dict=label_dict,
-        ),
-        dict(
-            level1_model=l1_model,
-            global_graph=global_graph,
-            train_ids=train_ids,
-            valid_ids=valid_ids,
-            label_dict=label_dict,
-        ),
-        dict(
-            l1_model=l1_model,
-            graph=global_graph,
-            train_ids=train_ids,
-            valid_ids=valid_ids,
-            label_dict=label_dict,
-        ),
-        dict(
-            l1_model=l1_model,
-            global_graph=global_graph,
-            ids=train_ids,
-            valid_ids=valid_ids,
-            label_dict=label_dict,
-        ),
-        dict(
-            l1_model=l1_model,
-            global_graph=global_graph,
-            contract_ids=train_ids,
-            valid_ids=valid_ids,
-            label_dict=label_dict,
-        ),
-    ]
+    if _is_none_or_empty(train_loader) and _is_none_or_empty(train_ids):
+        log.warning("[Revision L2] Empty training split. trainer.fit() skipped.")
+        return {
+            "history": [],
+            "best_score": None,
+            "best_metric": None,
+            "best_mode": None,
+            "epochs_ran": 0,
+            "skipped": True,
+            "reason": "empty_train_ids",
+        }
 
-    for kw in variants:
-        try:
-            return trainer.fit(**kw)
-        except TypeError as exc:
-            last_exc = exc
+    if valid_loader is not None and _is_empty(valid_loader):
+        valid_loader = None
+    if valid_ids is not None and _is_empty(valid_ids):
+        valid_ids = None
 
-    try:
-        return trainer.fit(l1_model, global_graph, train_ids, valid_ids, label_dict)
-    except TypeError as exc:
-        last_exc = exc
-
-    raise TypeError(
-        f"Level2Trainer.fit 호출 호환 실패: {last_exc}"
+    return trainer.fit(
+        l1_model=l1_model,
+        global_graph=global_graph,
+        train_ids=train_ids,
+        valid_ids=valid_ids,
+        label_dict=labels,
+        train_loader=train_loader,
+        valid_loader=valid_loader,
+        loader_builder=loader_builder,
+        **kwargs,
     )
+
 
 
 # ---------------------------------------------------------------------------
@@ -436,30 +497,54 @@ def run_revision_l1(
     l1_cfg = _cfg_to_attrdict(l1_cfg_raw)
 
     log.info("[Revision L1] Training Level1 model …")
+ 
+    train_graphs, valid_graphs, test_graphs, labels, _ = _normalize_graph_splits(dataset)
+ 
+    train_n = _safe_len(train_graphs) or 0
+    valid_n = _safe_len(valid_graphs) or 0 if valid_graphs is not None else 0
+    test_n = _safe_len(test_graphs) or 0
+ 
+    log.info(
+        "[Benchmark] Normalized split sizes: train=%d, valid=%d, test=%d",
+        train_n, valid_n, test_n)
+    
+    if train_n == 0 and test_n == 0:
+        log.warning(
+            "[Benchmark] Dataset splits are empty. Training/evaluation stages will be skipped. "
+            "Check configs/benchmark/strict_smoke.yaml dataset path/split settings."
+        )
 
-    train_graphs = _maybe_limit_graphs(_get_split_graphs(dataset, "train"), cfg, "train")
-    valid_graphs = _maybe_limit_graphs(_get_split_graphs(dataset, "valid", "val"), cfg, "val")
-    test_graphs = _maybe_limit_graphs(_get_split_graphs(dataset, "test"), cfg, "test")
+    log.info(
+        "[Revision L1] split sizes: train=%d, valid=%d, test=%d",
+        train_n, valid_n, test_n
+    )
+ 
+    if train_n == 0:
+        _record_skip(table, "revision_level1", "empty_train_graphs", setting)
+        return
+ 
+    if test_n == 0:
+        log.warning("[Revision L1] No test graphs found. Training may run, but benchmark evaluation will be skipped.")
+ 
 
     model = Level1Model.from_config(l1_cfg_raw)
     optimizer = _build_optimizer(model, l1_cfg_raw)
     trainer = Level1Trainer(model=model, optimizer=optimizer, cfg=l1_cfg)
 
-    try:
-        # trainer.fit(
-        #     train_graphs=train_graphs,
-        #     valid_graphs=valid_graphs,
-        #     label_dict=dataset.labels,
-        # )
-        _call_level1_trainer_fit(
-            trainer,
-            train_graphs=train_graphs,
-            valid_graphs=valid_graphs,
-            label_dict=dataset.labels,
-        )
-
-    except TypeError:
-        trainer.fit(train_graphs, valid_graphs, dataset.labels)
+    fit_out = _call_level1_trainer_fit(
+        trainer,
+        train_graphs=train_graphs,
+        valid_graphs=valid_graphs,
+        labels=labels,
+    )
+ 
+    if fit_out.get("skipped"):
+        _record_skip(table, "revision_level1", fit_out.get("reason", "unknown"), setting)
+        return
+ 
+    if test_n == 0:
+        _record_skip(table, "revision_level1", "empty_test_graphs_after_training", setting)
+        return
 
     scores: Dict[str, float] = {}
     for tg in test_graphs:
@@ -482,10 +567,6 @@ def run_revision_l1_l2(
     table: BenchmarkTable,
     setting: str,
 ) -> None:
-    from gog_fraud.models.level1.model import Level1Model
-    from gog_fraud.models.level2.model import Level2Model
-    from gog_fraud.training.loops.level1 import Level1Trainer
-    from gog_fraud.training.loops.level2 import Level2Trainer
 
     if not hasattr(dataset, "global_graph") or dataset.global_graph is None:
         log.warning("[Revision L1+L2] dataset.global_graph is None. Skipping.")
@@ -498,9 +579,22 @@ def run_revision_l1_l2(
     l1_cfg = _cfg_to_attrdict(l1_cfg_raw)
     l2_cfg = _cfg_to_attrdict(l2_cfg_raw)
 
-    train_graphs = _maybe_limit_graphs(_get_split_graphs(dataset, "train"), cfg, "train")
-    valid_graphs = _maybe_limit_graphs(_get_split_graphs(dataset, "valid", "val"), cfg, "val")
-    test_graphs = _maybe_limit_graphs(_get_split_graphs(dataset, "test"), cfg, "test")
+    train_graphs, valid_graphs, test_graphs, labels, global_graph = _normalize_graph_splits(dataset)
+ 
+    train_n = _safe_len(train_graphs) or 0
+    test_n = _safe_len(test_graphs) or 0
+ 
+    if global_graph is None:
+        _record_skip(table, "revision_l1_l2", "global_graph_is_none", setting)
+        return
+ 
+    if train_n == 0:
+        _record_skip(table, "revision_l1_l2", "empty_train_graphs", setting)
+        return
+ 
+    if test_n == 0:
+        _record_skip(table, "revision_l1_l2", "empty_test_graphs", setting)
+        return
 
     l1_model = Level1Model.from_config(l1_cfg_raw)
     l1_optimizer = _build_optimizer(l1_model, l1_cfg_raw)
@@ -598,24 +692,42 @@ def run_revision_full(
     l1_cfg = _cfg_to_attrdict(l1_cfg_raw)
     l2_cfg = _cfg_to_attrdict(l2_cfg_raw)
 
-    train_graphs = _maybe_limit_graphs(_get_split_graphs(dataset, "train"), cfg, "train")
-    valid_graphs = _maybe_limit_graphs(_get_split_graphs(dataset, "valid", "val"), cfg, "val")
-    test_graphs = _maybe_limit_graphs(_get_split_graphs(dataset, "test"), cfg, "test")
-
+    train_graphs, valid_graphs, test_graphs, labels, global_graph = _normalize_graph_splits(dataset)
+ 
+    train_n = _safe_len(train_graphs) or 0
+    valid_n = _safe_len(valid_graphs) or 0 if valid_graphs is not None else 0
+    test_n = _safe_len(test_graphs) or 0
+ 
+    log.info(
+        "[Revision Full] split sizes: train=%d, valid=%d, test=%d, has_global_graph=%s",
+        train_n, valid_n, test_n, global_graph is not None
+    )
+ 
+    if train_n == 0:
+        _record_skip(table, "revision_full", "empty_train_graphs", setting)
+        return
+ 
+    if global_graph is None:
+        _record_skip(table, "revision_full", "global_graph_is_none", setting)
+        return
+ 
+    if test_n == 0:
+        log.warning("[Revision Full] No test graphs found. Training may run, but final benchmark evaluation will be skipped.")
+ 
     l1_model = Level1Model.from_config(l1_cfg_raw)
     l1_optimizer = _build_optimizer(l1_model, l1_cfg_raw)
     l1_trainer = Level1Trainer(model=l1_model, optimizer=l1_optimizer, cfg=l1_cfg)
-    try:
-        # l1_trainer.fit(train_graphs=train_graphs, valid_graphs=valid_graphs, label_dict=dataset.labels)
-        _call_level1_trainer_fit(
-            l1_trainer,
-            train_graphs=train_graphs,
-            valid_graphs=valid_graphs,
-            label_dict=dataset.labels,
-        )
 
-    except TypeError:
-        l1_trainer.fit(train_graphs, valid_graphs, dataset.labels)
+    l1_fit_out = _call_level1_trainer_fit(
+        l1_trainer,
+        train_graphs=train_graphs,
+        valid_graphs=valid_graphs,
+        labels=labels,
+    )
+ 
+    if l1_fit_out.get("skipped"):
+        _record_skip(table, "revision_full", l1_fit_out.get("reason", "l1_skipped"), setting)
+        return
 
     l1_scores: Dict[str, float] = {}
     for tg in test_graphs:
@@ -625,6 +737,7 @@ def run_revision_full(
             log.warning(f"[Full:L1] Skip {tg.contract_id}: {exc}")
             l1_scores[tg.contract_id] = 0.0
 
+    ## Level 2 training and inference
     l2_scores: Dict[str, float] = {}
     if hasattr(dataset, "global_graph") and dataset.global_graph is not None:
         try:
@@ -636,33 +749,27 @@ def run_revision_full(
             valid_ids = _get_split_ids(dataset, "valid", "val")
             test_ids = [tg.contract_id for tg in test_graphs]
 
-            try:
-                # l2_trainer.fit(
-                #     l1_model=l1_model,
-                #     global_graph=dataset.global_graph,
-                #     train_ids=train_ids,
-                #     valid_ids=valid_ids,
-                #     label_dict=dataset.labels,
-                # )
-                _call_level2_trainer_fit(
-                    l2_trainer,
-                    l1_model=l1_model,
-                    global_graph=dataset.global_graph,
-                    train_ids=train_ids,
-                    valid_ids=valid_ids,
-                    label_dict=dataset.labels,
-                )
+            if _is_none_or_empty(train_ids):
+                _record_skip(table, "revision_full", "empty_train_ids_for_level2", setting)
+                return
+    
 
-            except TypeError:
-                # l2_trainer.fit(l1_model, dataset.global_graph, train_ids, valid_ids, dataset.labels)
-                _call_level2_trainer_fit(
-                    l2_trainer,
-                    l1_model,
-                    global_graph=dataset.global_graph,
-                    train_ids=train_ids,
-                    valid_ids=valid_ids,
-                    label_dict=dataset.labels,
-                )
+            l2_fit_out = _call_level2_trainer_fit(
+                l2_trainer,
+                l1_model=l1_model,
+                global_graph=global_graph,
+                train_ids=train_ids,
+                valid_ids=valid_ids,
+                labels=labels,
+            )
+        
+            if l2_fit_out.get("skipped"):
+                _record_skip(table, "revision_full", l2_fit_out.get("reason", "l2_skipped"), setting)
+                return
+        
+            if test_n == 0 or _is_none_or_empty(test_ids):
+                _record_skip(table, "revision_full", "empty_test_split_for_final_eval", setting)
+                return
 
             l2_out = l2_model.predict(
                 l1_model=l1_model,
