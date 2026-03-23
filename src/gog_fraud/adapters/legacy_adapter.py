@@ -269,6 +269,30 @@ def _sanitize_score_dict(score_dict: Dict[str, float]) -> Dict[str, float]:
 # Internal single-model runner
 # ---------------------------------------------------------
 
+def _extract_scores(detector, data):
+    if hasattr(detector, "decision_scores_"):
+        return detector.decision_scores_
+    if hasattr(detector, "decision_score_"):
+        return detector.decision_score_
+    if hasattr(detector, "decision_function"):
+        try:
+            return detector.decision_function(data)
+        except TypeError:
+            try:
+                return detector.decision_function()
+            except Exception:
+                pass
+    if hasattr(detector, "predict"):
+        try:
+            out = detector.predict(data, return_score=True)
+            if isinstance(out, tuple) and len(out) >= 2:
+                return out[1]
+        except Exception:
+            pass
+    return None
+
+
+
 class _LegacySingleRunner:
     def __init__(self, model_name: str, cfg: LegacyAdapterConfig):
         self.model_name = str(model_name)
@@ -300,6 +324,9 @@ class _LegacySingleRunner:
             }
             return self.detector_cls(**fallback)
 
+
+
+
     def _score_one(self, contract_id: str, graph: Data) -> Optional[float]:
         try:
             g = _prepare_graph(graph)
@@ -317,6 +344,18 @@ class _LegacySingleRunner:
             raw_scores = getattr(detector, "decision_scores_", None)
             if raw_scores is None:
                 raise RuntimeError("detector.decision_scores_ is missing after fit()")
+            
+            detector.fit(g)
+            raw_scores = _extract_detector_scores(detector, g)
+
+            if raw_scores is None:
+                log.warning(
+                    "[LegacyRunner:%s] Skip %s: no detector scores available after fit()",
+                    self.model_name, contract_id
+                )
+                # raise RuntimeError("detector.decision_scores_ is missing after fit()")
+                return None
+
 
             score = _aggregate_node_scores(
                 raw_scores,

@@ -474,6 +474,14 @@ def run_legacy_baselines(
 # ---------------------------------------------------------------------------
 # (B) revision l1
 # ---------------------------------------------------------------------------
+
+from torch_geometric.loader import DataLoader as PyGDataLoader
+
+def _to_level1_loader(graphs, batch_size, shuffle):
+    data_list = [g.graph if hasattr(g, "graph") else g for g in graphs]
+    return PyGDataLoader(data_list, batch_size=batch_size, shuffle=shuffle)
+
+
 def run_revision_l1(
     dataset: FraudDataset,
     cfg: dict,

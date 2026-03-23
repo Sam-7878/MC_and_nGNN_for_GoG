@@ -8,7 +8,64 @@ import logging
 import torch
 from torch.amp import GradScaler, autocast
 
+from typing import Any, Iterable, List, Optional
+
+from torch.utils.data import DataLoader as TorchDataLoader
+from torch_geometric.loader import DataLoader as PyGDataLoader
+
+try:
+    from gog_fraud.data.io.transaction_loader import TransactionGraph
+except Exception:
+    TransactionGraph = None
+
+
+
 log = logging.getLogger(__name__)
+
+
+def _is_loader(obj: Any) -> bool:
+    return hasattr(obj, "__iter__") and hasattr(obj, "__len__") and not isinstance(obj, (list, tuple))
+
+
+def _unwrap_graph_items(items: Any) -> List[Any]:
+    if items is None:
+        return []
+
+    if isinstance(items, (list, tuple)):
+        seq = list(items)
+    else:
+        try:
+            seq = list(items)
+        except Exception:
+            return []
+
+    out = []
+    for x in seq:
+        # TransactionGraph wrapper
+        if hasattr(x, "graph"):
+            out.append(x.graph)
+        else:
+            out.append(x)
+    return out
+
+
+def _make_pyg_loader(
+    items: Any,
+    *,
+    batch_size: int = 1,
+    shuffle: bool = False,
+    num_workers: int = 0,
+):
+    data_list = _unwrap_graph_items(items)
+    if not data_list:
+        return None
+    return PyGDataLoader(
+        data_list,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+    )
+
 
 
 def _cfg_to_dict(cfg: Any) -> dict:
@@ -202,44 +259,66 @@ def _build_pyg_loader(data, batch_size: int, shuffle: bool):
 
 
 def _prepare_level1_loader(
-    source,
+    data_or_loader,
     *,
-    split: str,
-    batch_size: int,
-    shuffle: bool,
-    label_dict=None,
+    split_name: str,
     loader_builder=None,
-    **kwargs,
+    batch_size: int = 1,
+    shuffle: bool = False,
+    num_workers: int = 0,
 ):
-    if source is None:
-        return None
+    # 1) already a loader
+    if _is_loader(data_or_loader):
+        return data_or_loader
 
-    if _is_loader_like(source):
-        return source
-
+    # 2) try explicit builder first
     if loader_builder is not None:
-        built = _call_compatible(
-            loader_builder,
-            split=split,
-            graphs=source,
-            train_graphs=source if split == "train" else None,
-            valid_graphs=source if split != "train" else None,
-            data=source,
-            label_dict=label_dict,
-            batch_size=batch_size,
-            shuffle=shuffle,
-            **kwargs,
-        )
-        if built is not None:
-            return built
+        builder_calls = [
+            lambda: loader_builder(
+                data_or_loader,
+                split=split_name,
+                batch_size=batch_size,
+                shuffle=shuffle,
+                num_workers=num_workers,
+            ),
+            lambda: loader_builder(
+                data_or_loader,
+                batch_size=batch_size,
+                shuffle=shuffle,
+                num_workers=num_workers,
+            ),
+            lambda: loader_builder(data_or_loader, split_name),
+            lambda: loader_builder(data_or_loader),
+        ]
 
-    if _can_auto_build_graph_loader(source):
-        return _build_pyg_loader(source, batch_size=batch_size, shuffle=shuffle)
+        last_err = None
+        for fn in builder_calls:
+            try:
+                built = fn()
+                if built is not None:
+                    return built
+            except TypeError as e:
+                last_err = e
+            except Exception as e:
+                last_err = e
+
+    # 3) automatic fallback: list of TransactionGraph or Data
+    auto_loader = _make_pyg_loader(
+        data_or_loader,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+    )
+    if auto_loader is not None:
+        return auto_loader
 
     raise TypeError(
-        f"Unable to resolve {split} loader. "
-        f"Pass `{split}_loader` directly or provide a compatible `loader_builder`."
+        f"Unable to resolve {split_name} loader. "
+        f"type={type(data_or_loader).__name__}, "
+        f"loader_builder={type(loader_builder).__name__ if loader_builder is not None else None}. "
+        "Pass `train_loader` directly or provide a compatible `loader_builder`."
     )
+
 
 
 @dataclass
