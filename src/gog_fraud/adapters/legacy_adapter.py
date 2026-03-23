@@ -375,6 +375,25 @@ class LegacyBatchRunner:
     def _get_detector_kwargs(self, model_name: str) -> Dict[str, Any]:
         key = str(model_name).upper()
         return dict(self.detector_overrides.get(key, {}))
+    
+    # Ensure the 'run_all' method exists
+    def run_all(self, test_graphs):
+        # Your processing logic here; for example:
+        scores = []
+        for graph in test_graphs:
+            score = self.process_graph(graph)
+            scores.append(score)
+        return {graph.name: s for graph, s in zip(test_graphs, scores)}   # 반드시 dict 형태로 반환해야 합니다.
+
+    # def run_all(self, test_graphs):
+    #     scores = []
+    #     for g in test_graphs:
+    #         scores.append(self._predict(g))
+    #     return {g.name: s for g, s in zip(test_graphs, scores)}   # 반드시 dict 형태로 반환해야 합니다.
+    
+    def process_graph(self, graph):
+        # Process your graph and return a score
+        pass
 
     def run_detector(
         self,

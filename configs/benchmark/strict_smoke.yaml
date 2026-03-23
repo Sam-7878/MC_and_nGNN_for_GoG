@@ -24,7 +24,7 @@ dataset:
 # 아래 설정을 false에서 true로 변경
   load_global_graph: true
   chunk_size: 100
-
+  smoke_test: true
 
 legacy:
   models: ["DOMINANT"]

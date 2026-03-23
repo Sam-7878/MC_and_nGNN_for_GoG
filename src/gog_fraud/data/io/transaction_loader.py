@@ -22,6 +22,7 @@ class TransactionGraph:
     chain: str
     source_path: Optional[str] = None
     meta: Dict = field(default_factory=dict)
+    name: Optional[str] = None
 
 
 class TransactionLoader:

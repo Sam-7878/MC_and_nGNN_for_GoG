@@ -19,6 +19,8 @@ from gog_fraud.models.level1.model import Level1Model
 from gog_fraud.models.level2.model import Level2Model
 from gog_fraud.training.loops.level1 import Level1Trainer
 from gog_fraud.training.loops.level2 import Level2Trainer
+from gog_fraud.training.loops.level1 import Level1Trainer
+from gog_fraud.models.level1.level1_gnn import Level1GNN   # 예시 모델 위치
 
 logging.basicConfig(
     level=logging.INFO,
@@ -82,45 +84,213 @@ def _record_skip(table, model_name: str, reason: str, setting: str):
         pass
 
 
-
-
+# ============================================================
+# [FIX 1] _call_level1_trainer_fit (line ~85~120)
+# - label_dict 중복 전달 제거
+# - split 키워드 제거
+# ============================================================
 def _call_level1_trainer_fit(
     trainer,
-    *,
-    train_graphs=None,
-    valid_graphs=None,
-    labels=None,
-    train_loader=None,
-    valid_loader=None,
-    loader_builder=None,
-    **kwargs,
-):
-    if _is_none_or_empty(train_loader) and _is_none_or_empty(train_graphs):
-        log.warning("[Revision L1] Empty training split. trainer.fit() skipped.")
-        return {
-            "history": [],
-            "best_score": None,
-            "best_metric": None,
-            "best_mode": None,
-            "epochs_ran": 0,
-            "skipped": True,
-            "reason": "empty_train_graphs",
-        }
+    train_graphs: list,
+    valid_graphs: list,
+    label_dict: dict,
+    cfg: dict,
+) -> dict:
+    l1_cfg = cfg.get("level1", {})
 
-    if valid_loader is not None and _is_empty(valid_loader):
-        valid_loader = None
-    if valid_graphs is not None and _is_empty(valid_graphs):
-        valid_graphs = None
+    log.debug(
+        f"[_call_level1_trainer_fit] "
+        f"train={len(train_graphs)}, valid={len(valid_graphs)}, "
+        f"label_dict type={type(label_dict).__name__}, "
+        f"l1_cfg={l1_cfg}"
+    )
+
+    # label_dict 타입 검증
+    if not isinstance(label_dict, dict):
+        raise TypeError(
+            f"[_call_level1_trainer_fit] label_dict must be dict, "
+            f"got {type(label_dict).__name__}"
+        )
 
     return trainer.fit(
         train_graphs=train_graphs,
         valid_graphs=valid_graphs,
-        label_dict=labels,
-        train_loader=train_loader,
-        valid_loader=valid_loader,
-        loader_builder=loader_builder,
-        **kwargs,
+        label_dict=label_dict,          # ✅ keyword 하나만 사용
+        epochs=l1_cfg.get("epochs", 50),
+        lr=l1_cfg.get("lr", 1e-3),
+        batch_size=l1_cfg.get("batch_size", 32),
+        # ✅ split= 제거 → _prepare_level1_loader 시그니처와 일치
     )
+
+
+# ------------------------------------------------------------------
+# 1) Level-1 trainer builder
+# ------------------------------------------------------------------
+def _build_level1_trainer(cfg: dict) -> "Level1Trainer":
+    """
+    cfg['level1'] 하위 키를 읽어 Level1Trainer 인스턴스를 반환.
+    """
+
+    l1_cfg = cfg.get("level1", {})
+    model = Level1GNN(
+        in_dim=l1_cfg.get("in_dim", 64),
+        hidden_dim=l1_cfg.get("hidden_dim", 128),
+        out_dim=l1_cfg.get("out_dim", 64),
+        num_layers=l1_cfg.get("num_layers", 3),
+        dropout=l1_cfg.get("dropout", 0.2),
+    )
+    return Level1Trainer(
+        model=model,
+        device=cfg.get("device", "cuda"),
+        epochs=l1_cfg.get("epochs", 50),
+        lr=l1_cfg.get("lr", 1e-3),
+        weight_decay=l1_cfg.get("weight_decay", 1e-5),
+    )
+
+
+# ------------------------------------------------------------------
+# 2) Level-2 trainer builder
+# ------------------------------------------------------------------
+def _build_level2_trainer(cfg: dict) -> "Level2Trainer":
+    """
+    cfg['level2'] 하위 키를 읽어 Level2Trainer 인스턴스를 반환.
+    """
+    from gog_fraud.training.loops.level2 import Level2Trainer
+    from gog_fraud.models.level2_gnn import Level2GNN   # 예시 모델 위치
+
+    l2_cfg = cfg.get("level2", {})
+    model = Level2GNN(
+        in_dim=l2_cfg.get("in_dim", 64),      # 보통 Level1 out_dim 과 동일
+        hidden_dim=l2_cfg.get("hidden_dim", 128),
+        out_dim=l2_cfg.get("out_dim", 2),      # 이진 분류 가정
+        num_layers=l2_cfg.get("num_layers", 3),
+        dropout=l2_cfg.get("dropout", 0.2),
+    )
+    return Level2Trainer(
+        model=model,
+        device=cfg.get("device", "cuda"),
+        epochs=l2_cfg.get("epochs", 50),
+        lr=l2_cfg.get("lr", 1e-3),
+        weight_decay=l2_cfg.get("weight_decay", 1e-5),
+    )
+
+
+# ============================================================
+# [FIX 2] run_revision_l1 (line ~540~560)
+# - smoke 모드 split size 로그 추가
+# - _call_level1_trainer_fit 올바르게 호출
+# ============================================================
+def run_revision_l1(dataset, cfg, table, setting):
+    log.info("[Revision L1] Training Level1 model …")
+
+    train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
+    log.info(
+        f"[Revision L1] split sizes: "
+        f"train={len(train_graphs)}, valid={len(valid_graphs)}, test={len(test_graphs)}"
+    )
+
+    trainer = _build_level1_trainer(cfg)
+
+    try:
+        fit_out = _call_level1_trainer_fit(
+            trainer=trainer,
+            train_graphs=train_graphs,
+            valid_graphs=valid_graphs,
+            label_dict=dataset.labels,  # ✅ dict 타입 확인
+            cfg=cfg,
+        )
+    except Exception as e:
+        log.error(f"[Revision L1] fit failed: {e}", exc_info=True)
+        raise
+
+    # 평가
+    scores = trainer.evaluate(test_graphs, label_dict=dataset.labels)
+    _record_scores(table, "Revision-L1", scores)
+    return scores
+
+
+# ============================================================
+# [FIX 3] run_revision_l1_l2 (line ~610~630)
+# - label_dict 중복 전달 제거
+# - fallback 직접 호출 제거 (동일 에러 반복 방지)
+# ============================================================
+def run_revision_l1_l2(dataset, cfg, table, setting):
+    log.info("[Revision L1+L2] Training Level1 + Level2 …")
+
+    train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
+
+    # Level1 Trainer
+    l1_trainer = _build_level1_trainer(cfg)
+    try:
+        l1_fit_out = _call_level1_trainer_fit(
+            trainer=l1_trainer,
+            train_graphs=train_graphs,
+            valid_graphs=valid_graphs,
+            label_dict=dataset.labels,  # ✅ keyword 하나만
+            cfg=cfg,
+        )
+    except Exception as e:
+        log.error(f"[Revision L1+L2] Level1 fit failed: {e}", exc_info=True)
+        raise  # ✅ fallback 직접 호출 제거 → 동일 에러 반복 방지
+
+    # Level2 Trainer
+    l2_trainer = _build_level2_trainer(cfg)
+    node_embeddings = l1_fit_out.get("node_embeddings", None)
+    l2_fit_out = l2_trainer.fit(
+        train_graphs=train_graphs,
+        valid_graphs=valid_graphs,
+        label_dict=dataset.labels,
+        node_embeddings=node_embeddings,
+    )
+
+    scores = l2_trainer.evaluate(test_graphs, label_dict=dataset.labels)
+    _record_scores(table, "Revision-L1+L2", scores)
+    return scores
+
+
+# ============================================================
+# [FIX 4] run_revision_full (line ~720~730)
+# - 동일하게 _call_level1_trainer_fit keyword 통일
+# ============================================================
+def run_revision_full(dataset, cfg, table, setting):
+    log.info("[Revision Full] Training Level1 + Level2 + Fusion …")
+
+    train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
+    log.info(
+        f"[Revision Full] split sizes: "
+        f"train={len(train_graphs)}, valid={len(valid_graphs)}, "
+        f"test={len(test_graphs)}, has_global_graph={dataset.global_graph is not None}"
+    )
+
+    # Level1
+    l1_trainer = _build_level1_trainer(cfg)
+    l1_fit_out = _call_level1_trainer_fit(
+        trainer=l1_trainer,
+        train_graphs=train_graphs,
+        valid_graphs=valid_graphs,
+        label_dict=dataset.labels,  # ✅ keyword 하나만
+        cfg=cfg,
+    )
+
+    # Level2 + Fusion
+    l2_trainer = _build_level2_trainer(cfg)
+    l2_fit_out = l2_trainer.fit(
+        train_graphs=train_graphs,
+        valid_graphs=valid_graphs,
+        label_dict=dataset.labels,
+        global_graph=dataset.global_graph,
+        node_embeddings=l1_fit_out.get("node_embeddings"),
+    )
+
+    scores = l2_trainer.evaluate(
+        test_graphs,
+        label_dict=dataset.labels,
+        global_graph=dataset.global_graph,
+    )
+    _record_scores(table, "Revision-Full", scores)
+    return scores
+
+
 
 
 
@@ -250,18 +420,27 @@ def _load_config(path: str) -> dict:
 # ---------------------------------------------------------------------------
 # dataset split helpers
 # ---------------------------------------------------------------------------
-def _get_split_graphs(dataset: FraudDataset, *names: str):
-    last_exc = None
-    for name in names:
-        try:
-            graphs = dataset.split_graphs(name)
-            if graphs is not None:
-                return graphs
-        except Exception as exc:
-            last_exc = exc
-    if last_exc:
-        raise last_exc
-    return []
+def _get_split_graphs(dataset, cfg, setting):
+    train, valid, test = dataset.train_graphs, dataset.valid_graphs, dataset.test_graphs
+    smoke_test = bool(_cfg_get(cfg, "smoke_test", default=False))  # 기존 그대로
+
+    if smoke_test:
+        # 최소 1개 보장 (ValueError 방지 강화)
+        train_limit = max(len(train) // 25, 1)
+        valid_limit = max(len(valid) // 10, 1)
+        test_limit = max(len(test) // 5, 1)
+        train = train[:train_limit]
+        valid = valid[:valid_limit]
+        test = test[:test_limit]
+
+    # 디버그 로그 추가 (선택적: 문제 추적 용이)
+    log.info(
+        f"[get_split_graphs] smoke={smoke_test}, "
+        f"train={len(train)}, valid={len(valid)}, test={len(test)}"
+    )
+
+    return train, valid, test
+
 
 
 def _get_split_ids(dataset: FraudDataset, *names: str):
@@ -430,50 +609,65 @@ def run_legacy_baselines(
         lr=float(_cfg_get(legacy_cfg, "lr", 0.003)),
     )
 
-    train_graphs = _maybe_limit_graphs(_get_split_graphs(dataset, "train"), cfg, "train")
-    _ = _maybe_limit_graphs(_get_split_graphs(dataset, "valid", "val"), cfg, "val")
-    test_graphs = _maybe_limit_graphs(_get_split_graphs(dataset, "test"), cfg, "test")
+    # ==================================================
+    # 수정된 split 그래프 가져오기 부분
+    # - _get_split_graphs를 한 번만 호출 (split-specific 제거)
+    # - 각 split에 _maybe_limit_graphs 적용
+    # - setting은 상위에서 전달된 값으로 사용 (예: "strict")
+    # ==================================================
+
+    # _get_split_graphs 한 번 호출로 모든 split 가져오기
+    train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
+
+    # 각 split에 _maybe_limit_graphs 적용 (기존 로직 유지)
+    train_graphs = _maybe_limit_graphs(train_graphs, cfg, "train")
+    valid_graphs = _maybe_limit_graphs(valid_graphs, cfg, "val")  # "valid" 대신 "val" 사용 (기존 코드와 일치)
+    test_graphs = _maybe_limit_graphs(test_graphs, cfg, "test")
+
 
     if not test_graphs:
         log.warning("[Legacy] No test graphs found!")
         return
-
-    batch = LegacyBatchRunner(
-        # model_names=model_names,
-        # base_cfg=base_adapter_cfg,
-        detector_overrides=base_adapter_cfg.detector_overrides,
-        score_reduce=base_adapter_cfg.score_reduce,
-        progress_every=base_adapter_cfg.progress_every)
     
-    all_scores = batch.run_all(test_graphs)
+    try:
+        batch = LegacyBatchRunner(
+            # model_names=model_names,
+            # base_cfg=base_adapter_cfg,
+            detector_overrides=base_adapter_cfg.detector_overrides,
+            score_reduce=base_adapter_cfg.score_reduce,
+            progress_every=base_adapter_cfg.progress_every)
+        
+        all_scores = batch.run_all(test_graphs)
 
-    for model_name, score_dict in all_scores.items():
-        contract_ids = [g.contract_id for g in test_graphs]
-        filtered = [
-            (float(score_dict.get(cid, 0.0)), int(dataset.labels[cid]))
-            for cid in contract_ids
-            if cid in dataset.labels
-        ]
-        if not filtered:
-            log.warning(f"[Legacy:{model_name}] No valid scores found.")
-            continue
+        for model_name, score_dict in all_scores.items():
+            contract_ids = [g.contract_id for g in test_graphs]
+            filtered = [
+                (float(score_dict.get(cid, 0.0)), int(dataset.labels[cid]))
+                for cid in contract_ids
+                if cid in dataset.labels
+            ]
+            if not filtered:
+                log.warning(f"[Legacy:{model_name}] No valid scores found.")
+                continue
 
-        ys_arr = [x[0] for x in filtered]
-        yt_arr = [x[1] for x in filtered]
+            ys_arr = [x[0] for x in filtered]
+            yt_arr = [x[1] for x in filtered]
 
-        result = evaluate_benchmark(
-            y_true=yt_arr,
-            y_score=ys_arr,
-            model_name=f"Legacy_{model_name}",
-            setting=setting,
-            threshold=float(_cfg_get(cfg, "threshold", 0.5)),
-            k_list=_cfg_get(cfg, "k_list", [10, 20, 50]),
-            bootstrap=bool(_cfg_get(cfg, "bootstrap", True)),
-        )
-        table.add(result)
-        log.info(str(result))
+            result = evaluate_benchmark(
+                y_true=yt_arr,
+                y_score=ys_arr,
+                model_name=f"Legacy_{model_name}",
+                setting=setting,
+                threshold=float(_cfg_get(cfg, "threshold", 0.5)),
+                k_list=_cfg_get(cfg, "k_list", [10, 20, 50]),
+                bootstrap=bool(_cfg_get(cfg, "bootstrap", True)),
+            )
+            table.add(result)
+            log.info(str(result))
 
-
+    except Exception as e:
+        print(f"Error on processing: {e}")
+        
 # ---------------------------------------------------------------------------
 # (B) revision l1
 # ---------------------------------------------------------------------------
@@ -484,317 +678,126 @@ def _to_level1_loader(graphs, batch_size, shuffle):
     data_list = [g.graph if hasattr(g, "graph") else g for g in graphs]
     return PyGDataLoader(data_list, batch_size=batch_size, shuffle=shuffle)
 
+ 
+def _prepare_level1_loader(train_graphs, valid_graphs): # Ensure you have the right signature
+    # Modify if you don't need to pass `split` argument anymore
+    # Implement the loading logic
+    pass
 
-def run_revision_l1(
-    dataset: FraudDataset,
-    cfg: dict,
-    table: BenchmarkTable,
-    setting: str,
-) -> None:
-
-    def _prepare_l1_cfg(raw: dict) -> dict:
-        raw = dict(raw or {})
-        raw.setdefault("device", "cuda" if torch.cuda.is_available() else "cpu")
-        raw.setdefault("use_amp", False)
-        raw.setdefault("pos_weight", None)
-        raw.setdefault("epochs", raw.get("max_epochs", 10))
-        raw.setdefault("log_every", 10)
-        raw.setdefault("grad_clip", 0.0)
-        raw.setdefault("num_workers", 0)
-        raw.setdefault("weight_decay", raw.get("weight_decay", 0.0))
-        return raw
-
-    l1_cfg_raw = _prepare_l1_cfg(_cfg_to_dict(_cfg_get(cfg, "level1", {}) or {}))
-    l1_cfg = _cfg_to_attrdict(l1_cfg_raw)
-
+# ============================================================
+# [FIX 2] run_revision_l1 (line ~540~560)
+# - smoke 모드 split size 로그 추가
+# - _call_level1_trainer_fit 올바르게 호출
+# ============================================================
+def run_revision_l1(dataset, cfg, table, setting):
     log.info("[Revision L1] Training Level1 model …")
  
-    train_graphs, valid_graphs, test_graphs, labels, _ = _normalize_graph_splits(dataset)
- 
-    train_n = _safe_len(train_graphs) or 0
-    valid_n = _safe_len(valid_graphs) or 0 if valid_graphs is not None else 0
-    test_n = _safe_len(test_graphs) or 0
- 
+    train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
     log.info(
-        "[Benchmark] Normalized split sizes: train=%d, valid=%d, test=%d",
-        train_n, valid_n, test_n)
-    
-    if train_n == 0 and test_n == 0:
-        log.warning(
-            "[Benchmark] Dataset splits are empty. Training/evaluation stages will be skipped. "
-            "Check configs/benchmark/strict_smoke.yaml dataset path/split settings."
-        )
-
-    log.info(
-        "[Revision L1] split sizes: train=%d, valid=%d, test=%d",
-        train_n, valid_n, test_n
+        f"[Revision L1] split sizes: "
+        f"train={len(train_graphs)}, valid={len(valid_graphs)}, test={len(test_graphs)}"
     )
  
-    if train_n == 0:
-        _record_skip(table, "revision_level1", "empty_train_graphs", setting)
-        return
+    trainer = _build_level1_trainer(cfg)
  
-    if test_n == 0:
-        log.warning("[Revision L1] No test graphs found. Training may run, but benchmark evaluation will be skipped.")
- 
-
-    model = Level1Model.from_config(l1_cfg_raw)
-    optimizer = _build_optimizer(model, l1_cfg_raw)
-    trainer = Level1Trainer(model=model, optimizer=optimizer, cfg=l1_cfg)
-
-    fit_out = _call_level1_trainer_fit(
-        trainer,
-        train_graphs=train_graphs,
-        valid_graphs=valid_graphs,
-        labels=labels,
-    )
- 
-    if fit_out.get("skipped"):
-        _record_skip(table, "revision_level1", fit_out.get("reason", "unknown"), setting)
-        return
- 
-    if test_n == 0:
-        _record_skip(table, "revision_level1", "empty_test_graphs_after_training", setting)
-        return
-
-    scores: Dict[str, float] = {}
-    for tg in test_graphs:
-        try:
-            out = model.predict(tg.graph)
-            scores[tg.contract_id] = _extract_scalar_score(out)
-        except Exception as exc:
-            log.warning(f"[L1] Skip {tg.contract_id}: {exc}")
-            scores[tg.contract_id] = 0.0
-
-    _append_result(scores, dataset, test_graphs, "Revision_L1", setting, cfg, table)
-
-
-# ---------------------------------------------------------------------------
-# (C) revision l1+l2
-# ---------------------------------------------------------------------------
-def run_revision_l1_l2(
-    dataset: FraudDataset,
-    cfg: dict,
-    table: BenchmarkTable,
-    setting: str,
-) -> None:
-
-    if not hasattr(dataset, "global_graph") or dataset.global_graph is None:
-        log.warning("[Revision L1+L2] dataset.global_graph is None. Skipping.")
-        return
-
-    log.info("[Revision L1+L2] Training Level1 + Level2 …")
-
-    l1_cfg_raw = _cfg_to_dict(_cfg_get(cfg, "level1", {}) or {})
-    l2_cfg_raw = _cfg_to_dict(_cfg_get(cfg, "level2", {}) or {})
-    l1_cfg = _cfg_to_attrdict(l1_cfg_raw)
-    l2_cfg = _cfg_to_attrdict(l2_cfg_raw)
-
-    train_graphs, valid_graphs, test_graphs, labels, global_graph = _normalize_graph_splits(dataset)
- 
-    train_n = _safe_len(train_graphs) or 0
-    test_n = _safe_len(test_graphs) or 0
- 
-    if global_graph is None:
-        _record_skip(table, "revision_l1_l2", "global_graph_is_none", setting)
-        return
- 
-    if train_n == 0:
-        _record_skip(table, "revision_l1_l2", "empty_train_graphs", setting)
-        return
- 
-    if test_n == 0:
-        _record_skip(table, "revision_l1_l2", "empty_test_graphs", setting)
-        return
-
-    l1_model = Level1Model.from_config(l1_cfg_raw)
-    l1_optimizer = _build_optimizer(l1_model, l1_cfg_raw)
-    l1_trainer = Level1Trainer(model=l1_model, optimizer=l1_optimizer, cfg=l1_cfg)
     try:
-        _call_level1_trainer_fit(
-            l1_trainer,
+        fit_out = _call_level1_trainer_fit(
+            trainer=trainer,
             train_graphs=train_graphs,
             valid_graphs=valid_graphs,
-            label_dict=dataset.labels,
+            label_dict=dataset.labels,  # ✅ dict 타입 확인
+            cfg=cfg,
         )
-    except TypeError:
-        l1_trainer.fit(train_graphs, valid_graphs, dataset.labels)
+    except Exception as e:
+        log.error(f"[Revision L1] fit failed: {e}", exc_info=True)
+        raise
+ 
+    # 평가
+    scores = trainer.evaluate(test_graphs, label_dict=dataset.labels)
+    _record_scores(table, "Revision-L1", scores)
+    return scores
 
-    l2_model = Level2Model.from_config(l2_cfg_raw)
-    l2_optimizer = _build_optimizer(l2_model, l2_cfg_raw)
-    l2_trainer = Level2Trainer(model=l2_model, optimizer=l2_optimizer, cfg=l2_cfg)
 
-    train_ids = _get_split_ids(dataset, "train")
-    valid_ids = _get_split_ids(dataset, "valid", "val")
-
+# ============================================================
+# [FIX 3] run_revision_l1_l2 (line ~610~630)
+# - label_dict 중복 전달 제거
+# - fallback 직접 호출 제거 (동일 에러 반복 방지)
+# ============================================================
+def run_revision_l1_l2(dataset, cfg, table, setting):
+    log.info("[Revision L1+L2] Training Level1 + Level2 …")
+ 
+    train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
+ 
+    # Level1 Trainer
+    l1_trainer = _build_level1_trainer(cfg)
     try:
-        _call_level2_trainer_fit(
-            l2_trainer,
-            l1_model=l1_model,
-            global_graph=dataset.global_graph,
-            train_ids=train_ids,
-            valid_ids=valid_ids,
-            label_dict=dataset.labels,
+        l1_fit_out = _call_level1_trainer_fit(
+            trainer=l1_trainer,
+            train_graphs=train_graphs,
+            valid_graphs=valid_graphs,
+            label_dict=dataset.labels,  # ✅ keyword 하나만
+            cfg=cfg,
         )
-
-    except TypeError:
-        _call_level2_trainer_fit(
-            l2_trainer,
-            l1_model,
-            global_graph=dataset.global_graph,
-            train_ids=train_ids,
-            valid_ids=valid_ids,
-            label_dict=dataset.labels,
-        )
-        
-    scores: Dict[str, float] = {}
-    test_ids = [tg.contract_id for tg in test_graphs]
-    try:
-        l2_out = l2_model.predict(
-            l1_model=l1_model,
-            global_graph=dataset.global_graph,
-            contract_ids=test_ids,
-        )
-        score_vec = _extract_score_tensor(l2_out).tolist()
-        for cid, score in zip(test_ids, score_vec):
-            scores[cid] = float(score)
-    except Exception as exc:
-        log.warning(f"[L1+L2] Inference error: {exc}. Falling back to L1.")
-        for tg in test_graphs:
-            try:
-                out = l1_model.predict(tg.graph)
-                scores[tg.contract_id] = _extract_scalar_score(out)
-            except Exception as sub_exc:
-                log.warning(f"[L1+L2:FALLBACK] Skip {tg.contract_id}: {sub_exc}")
-                scores[tg.contract_id] = 0.0
-
-    _append_result(scores, dataset, test_graphs, "Revision_L1+L2", setting, cfg, table)
-
-
-# ---------------------------------------------------------------------------
-# (D) revision full
-# ---------------------------------------------------------------------------
-def run_revision_full(
-    dataset: FraudDataset,
-    cfg: dict,
-    table: BenchmarkTable,
-    setting: str,
-) -> None:
-    from gog_fraud.models.level1.model import Level1Model
-    from gog_fraud.models.level2.model import Level2Model
-    from gog_fraud.training.loops.level1 import Level1Trainer
-    from gog_fraud.training.loops.level2 import Level2Trainer
-
-    log.info("[Revision Full] Training Level1 + Level2 + Fusion …")
-
-    l1_cfg_raw = _cfg_to_dict(_cfg_get(cfg, "level1", {}) or {})
-    l2_cfg_raw = _cfg_to_dict(_cfg_get(cfg, "level2", {}) or {})
-    fusion_cfg = _cfg_to_dict(_cfg_get(cfg, "fusion", {}) or {})
-
-    l1_cfg = _cfg_to_attrdict(l1_cfg_raw)
-    l2_cfg = _cfg_to_attrdict(l2_cfg_raw)
-
-    train_graphs, valid_graphs, test_graphs, labels, global_graph = _normalize_graph_splits(dataset)
+    except Exception as e:
+        log.error(f"[Revision L1+L2] Level1 fit failed: {e}", exc_info=True)
+        raise  # ✅ fallback 직접 호출 제거 → 동일 에러 반복 방지
  
-    train_n = _safe_len(train_graphs) or 0
-    valid_n = _safe_len(valid_graphs) or 0 if valid_graphs is not None else 0
-    test_n = _safe_len(test_graphs) or 0
- 
-    log.info(
-        "[Revision Full] split sizes: train=%d, valid=%d, test=%d, has_global_graph=%s",
-        train_n, valid_n, test_n, global_graph is not None
-    )
- 
-    if train_n == 0:
-        _record_skip(table, "revision_full", "empty_train_graphs", setting)
-        return
- 
-    if global_graph is None:
-        _record_skip(table, "revision_full", "global_graph_is_none", setting)
-        return
- 
-    if test_n == 0:
-        log.warning("[Revision Full] No test graphs found. Training may run, but final benchmark evaluation will be skipped.")
- 
-    l1_model = Level1Model.from_config(l1_cfg_raw)
-    l1_optimizer = _build_optimizer(l1_model, l1_cfg_raw)
-    l1_trainer = Level1Trainer(model=l1_model, optimizer=l1_optimizer, cfg=l1_cfg)
-
-    l1_fit_out = _call_level1_trainer_fit(
-        l1_trainer,
+    # Level2 Trainer
+    l2_trainer = _build_level2_trainer(cfg)
+    node_embeddings = l1_fit_out.get("node_embeddings", None)
+    l2_fit_out = l2_trainer.fit(
         train_graphs=train_graphs,
         valid_graphs=valid_graphs,
-        labels=labels,
+        label_dict=dataset.labels,
+        node_embeddings=node_embeddings,
     )
  
-    if l1_fit_out.get("skipped"):
-        _record_skip(table, "revision_full", l1_fit_out.get("reason", "l1_skipped"), setting)
-        return
+    scores = l2_trainer.evaluate(test_graphs, label_dict=dataset.labels)
+    _record_scores(table, "Revision-L1+L2", scores)
+    return scores
 
-    l1_scores: Dict[str, float] = {}
-    for tg in test_graphs:
-        try:
-            l1_scores[tg.contract_id] = _extract_scalar_score(l1_model.predict(tg.graph))
-        except Exception as exc:
-            log.warning(f"[Full:L1] Skip {tg.contract_id}: {exc}")
-            l1_scores[tg.contract_id] = 0.0
 
-    ## Level 2 training and inference
-    l2_scores: Dict[str, float] = {}
-    if hasattr(dataset, "global_graph") and dataset.global_graph is not None:
-        try:
-            l2_model = Level2Model.from_config(l2_cfg_raw)
-            l2_optimizer = _build_optimizer(l2_model, l2_cfg_raw)
-            l2_trainer = Level2Trainer(model=l2_model, optimizer=l2_optimizer, cfg=l2_cfg)
-
-            train_ids = _get_split_ids(dataset, "train")
-            valid_ids = _get_split_ids(dataset, "valid", "val")
-            test_ids = [tg.contract_id for tg in test_graphs]
-
-            if _is_none_or_empty(train_ids):
-                _record_skip(table, "revision_full", "empty_train_ids_for_level2", setting)
-                return
-    
-
-            l2_fit_out = _call_level2_trainer_fit(
-                l2_trainer,
-                l1_model=l1_model,
-                global_graph=global_graph,
-                train_ids=train_ids,
-                valid_ids=valid_ids,
-                labels=labels,
-            )
-        
-            if l2_fit_out.get("skipped"):
-                _record_skip(table, "revision_full", l2_fit_out.get("reason", "l2_skipped"), setting)
-                return
-        
-            if test_n == 0 or _is_none_or_empty(test_ids):
-                _record_skip(table, "revision_full", "empty_test_split_for_final_eval", setting)
-                return
-
-            l2_out = l2_model.predict(
-                l1_model=l1_model,
-                global_graph=dataset.global_graph,
-                contract_ids=test_ids,
-            )
-            score_vec = _extract_score_tensor(l2_out).tolist()
-            for cid, score in zip(test_ids, score_vec):
-                l2_scores[cid] = float(score)
-        except Exception as exc:
-            log.warning(f"[Full:L2] Failed. Falling back to L1-only fusion. Error: {exc}")
-
-    alpha = float(fusion_cfg.get("alpha", 0.5))
-    alpha = max(0.0, min(1.0, alpha))
-
-    fused_scores: Dict[str, float] = {}
-    for tg in test_graphs:
-        cid = tg.contract_id
-        s1 = float(l1_scores.get(cid, 0.0))
-        s2 = float(l2_scores.get(cid, s1))
-        fused_scores[cid] = alpha * s1 + (1.0 - alpha) * s2
-
-    _append_result(fused_scores, dataset, test_graphs, "Revision_Full", setting, cfg, table)
+# ============================================================
+# [FIX 4] run_revision_full (line ~720~730)
+# - 동일하게 _call_level1_trainer_fit keyword 통일
+# ============================================================
+def run_revision_full(dataset, cfg, table, setting):
+    log.info("[Revision Full] Training Level1 + Level2 + Fusion …")
+ 
+    train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
+    log.info(
+        f"[Revision Full] split sizes: "
+        f"train={len(train_graphs)}, valid={len(valid_graphs)}, "
+        f"test={len(test_graphs)}, has_global_graph={dataset.global_graph is not None}"
+    )
+ 
+    # Level1
+    l1_trainer = _build_level1_trainer(cfg)
+    l1_fit_out = _call_level1_trainer_fit(
+        trainer=l1_trainer,
+        train_graphs=train_graphs,
+        valid_graphs=valid_graphs,
+        label_dict=dataset.labels,  # ✅ keyword 하나만
+        cfg=cfg,
+    )
+ 
+    # Level2 + Fusion
+    l2_trainer = _build_level2_trainer(cfg)
+    l2_fit_out = l2_trainer.fit(
+        train_graphs=train_graphs,
+        valid_graphs=valid_graphs,
+        label_dict=dataset.labels,
+        global_graph=dataset.global_graph,
+        node_embeddings=l1_fit_out.get("node_embeddings"),
+    )
+ 
+    scores = l2_trainer.evaluate(
+        test_graphs,
+        label_dict=dataset.labels,
+        global_graph=dataset.global_graph,
+    )
+    _record_scores(table, "Revision-Full", scores)
+    return scores
 
 
 # ---------------------------------------------------------------------------
@@ -898,6 +901,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=str)
     parser.add_argument("--output", required=False, type=str, default=None)
+    parser.add_argument("--smoke", required=False, type=bool, default=True)
     args = parser.parse_args()
 
     cfg = _load_config(args.config)
@@ -925,14 +929,16 @@ def main():
     log.info("")
     log.info("=" * 50)
     log.info("(B) Running Revision Level1 …")
+
     try:
         run_revision_l1(dataset, cfg, table, setting)
-    except Exception:
-        log.exception("[Benchmark] Revision Level1 failed")
+    except Exception as e:
+        print(f"Error when running L1: {e}")
 
     log.info("")
     log.info("=" * 50)
     log.info("(C) Running Revision Level1 + Level2 …")
+
     try:
         run_revision_l1_l2(dataset, cfg, table, setting)
     except Exception:

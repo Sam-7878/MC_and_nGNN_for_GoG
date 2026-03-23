@@ -157,14 +157,7 @@ def _call_builder_safe(
 # Main public helper: _prepare_level1_loader
 # ---------------------------------------------------------------------------
 # 함수 정의부를 찾아 아래와 같이 split 인자를 추가 (기본값 제공)
-def _prepare_level1_loader(
-    items: Any, 
-    batch_size: int, 
-    shuffle: bool, 
-    num_workers: int, 
-    split: Optional[str] = None, # 이 부분을 추가
-    **kwargs        # 예기치 않은 추가 인자를 방어하기 위해 **kwargs도 추가하는 것이 안전합니다.
-) :
+def _prepare_level1_loader(graphs, label_dict, batch_size, split='train', shuffle=True) :
     """
     Resolves a PyG DataLoader from a variety of input types:
 
