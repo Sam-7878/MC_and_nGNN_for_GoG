@@ -20,7 +20,278 @@ except Exception:
 
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Level-1 DataLoader helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+from typing import Any, List, Optional, Sequence, Union
+
+from torch_geometric.data import Data, Batch
+
+
+_loader_log = logging.getLogger(__name__)
 log = logging.getLogger(__name__)
+
+
+
+
+
+
+
+# ---------------------------------------------------------------------------
+# TransactionGraph unwrap
+# ---------------------------------------------------------------------------
+def _to_pyg_data(item: Any) -> Optional[Data]:
+    """
+    Accepts:
+      - torch_geometric.data.Data  → returned as-is
+      - any object with .graph attribute (e.g. TransactionGraph) → returns .graph
+    Returns None if the item cannot be converted.
+    """
+    if isinstance(item, Data):
+        return item
+    if isinstance(item, Batch):
+        return item
+    if hasattr(item, "graph") and isinstance(item.graph, Data):
+        return item.graph
+    _loader_log.debug("[_to_pyg_data] Cannot unwrap type=%s", type(item).__name__)
+    return None
+
+
+def _unwrap_to_data_list(items: Any) -> List[Data]:
+    """
+    Converts any sequence of TransactionGraph/Data objects into
+    a flat list[Data], skipping items that cannot be converted.
+    """
+    if items is None:
+        return []
+
+    # already a plain list or tuple
+    if isinstance(items, (list, tuple)):
+        seq = list(items)
+    else:
+        # try to materialise any iterable (generator, Dataset, etc.)
+        try:
+            seq = list(items)
+        except Exception as exc:
+            _loader_log.warning("[_unwrap_to_data_list] Cannot iterate: %s", exc)
+            return []
+
+    out: List[Data] = []
+    skipped = 0
+    for x in seq:
+        data = _to_pyg_data(x)
+        if data is not None:
+            out.append(data)
+        else:
+            skipped += 1
+
+    if skipped:
+        _loader_log.warning(
+            "[_unwrap_to_data_list] Skipped %d/%d items that could not be unwrapped.",
+            skipped,
+            len(seq),
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Loader identity check
+# ---------------------------------------------------------------------------
+def _is_dataloader(obj: Any) -> bool:
+    """
+    Returns True if obj already behaves like a DataLoader
+    (has __iter__ + __len__ but is NOT a plain list/tuple/Data).
+    """
+    if isinstance(obj, (list, tuple, Data, Batch)):
+        return False
+    return hasattr(obj, "__iter__") and hasattr(obj, "__len__")
+
+
+# ---------------------------------------------------------------------------
+# Safe builder call: try multiple signatures
+# ---------------------------------------------------------------------------
+def _call_builder_safe(
+    builder: Any,
+    items: Any,
+    split_name: str,
+    batch_size: int,
+    shuffle: bool,
+    num_workers: int,
+) -> Optional[Any]:
+    """
+    Tries four progressively simpler signatures for `loader_builder`.
+    Returns the first non-None result, or None if all attempts fail.
+    """
+    sig_attempts = [
+        # (kwarg-dict to merge with required positional arg)
+        dict(split=split_name, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers),
+        dict(batch_size=batch_size, shuffle=shuffle, num_workers=num_workers),
+        dict(split=split_name),
+        {},
+    ]
+
+    last_err: Optional[Exception] = None
+    for kwargs in sig_attempts:
+        try:
+            result = builder(items, **kwargs)
+            if result is not None:
+                _loader_log.debug(
+                    "[_call_builder_safe] builder succeeded with kwargs=%s", list(kwargs.keys())
+                )
+                return result
+        except TypeError as exc:
+            last_err = exc
+        except Exception as exc:   # noqa: BLE001
+            _loader_log.warning(
+                "[_call_builder_safe] builder raised unexpected error: %s", exc
+            )
+            last_err = exc
+
+    _loader_log.debug("[_call_builder_safe] All signatures failed. last_err=%s", last_err)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Main public helper: _prepare_level1_loader
+# ---------------------------------------------------------------------------
+def _prepare_level1_loader(
+    graphs,
+    batch_size,
+    shuffle=False,
+    split=None,
+    **kwargs,
+) -> PyGDataLoader:
+    """
+    Resolves a PyG DataLoader from a variety of input types:
+
+    Priority order
+    ──────────────
+    1. `data_or_loader` is already a DataLoader-like object  → return as-is
+    2. `loader_builder` is provided  → try calling it with multiple signatures
+    3. Automatic fallback
+         a. Unwrap List[TransactionGraph] → List[Data]  → PyGDataLoader
+         b. Wrap List[Data]  directly     → PyGDataLoader
+
+    Parameters
+    ──────────
+    data_or_loader  : DataLoader | List[TransactionGraph] | List[Data]
+    split_name      : "train" | "valid" | "test"  (passed to builder)
+    loader_builder  : callable(items, **kwargs) → DataLoader  (optional)
+    batch_size      : batch size used when creating a new loader
+    shuffle         : shuffle flag used when creating a new loader
+    num_workers     : worker count used when creating a new loader
+
+    Raises
+    ──────
+    TypeError   if no path succeeds.
+    ValueError  if the resolved data list is empty.
+    """
+
+    # ── 1. Already a loader ────────────────────────────────────────────────
+    if _is_dataloader(data_or_loader):
+        _loader_log.debug(
+            "[_prepare_level1_loader] split=%s: received pre-built loader (%s).",
+            split_name,
+            type(data_or_loader).__name__,
+        )
+        return data_or_loader  # type: ignore[return-value]
+
+    # ── 2. Try loader_builder ──────────────────────────────────────────────
+    if loader_builder is not None:
+        built = _call_builder_safe(
+            builder=loader_builder,
+            items=data_or_loader,
+            split_name=split_name,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=num_workers,
+        )
+        if built is not None:
+            if _is_dataloader(built):
+                _loader_log.info(
+                    "[_prepare_level1_loader] split=%s: loader_builder succeeded → %s.",
+                    split_name,
+                    type(built).__name__,
+                )
+                return built
+            # builder returned a data-list instead of a loader – fall through
+            _loader_log.debug(
+                "[_prepare_level1_loader] split=%s: builder returned non-loader (%s), "
+                "will wrap in PyGDataLoader.",
+                split_name,
+                type(built).__name__,
+            )
+            data_or_loader = built  # re-assign and continue to fallback
+
+    # ── 3. Automatic unwrap + PyGDataLoader ────────────────────────────────
+    data_list = _unwrap_to_data_list(data_or_loader)
+
+    if not data_list:
+        raise ValueError(
+            f"[_prepare_level1_loader] split='{split_name}': "
+            f"Resolved data_list is empty. "
+            f"input type={type(data_or_loader).__name__}."
+        )
+
+    # Validate each Data object minimally
+    valid_list: List[Data] = []
+    for i, d in enumerate(data_list):
+        if getattr(d, "x", None) is None:
+            _loader_log.debug(
+                "[_prepare_level1_loader] split=%s item[%d] has no x; skipping.", split_name, i
+            )
+            continue
+        if getattr(d, "edge_index", None) is None:
+            _loader_log.debug(
+                "[_prepare_level1_loader] split=%s item[%d] has no edge_index; skipping.",
+                split_name,
+                i,
+            )
+            continue
+        # Ensure correct dtype
+        d.x = d.x.float()
+        d.edge_index = d.edge_index.long()
+        valid_list.append(d)
+
+    if not valid_list:
+        raise ValueError(
+            f"[_prepare_level1_loader] split='{split_name}': "
+            f"All {len(data_list)} items were filtered out (missing x or edge_index)."
+        )
+
+    if len(valid_list) < len(data_list):
+        _loader_log.warning(
+            "[_prepare_level1_loader] split=%s: %d/%d items filtered out (missing x/edge_index).",
+            split_name,
+            len(data_list) - len(valid_list),
+            len(data_list),
+        )
+
+    loader = PyGDataLoader(
+        valid_list,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+    )
+
+    _loader_log.info(
+        "[_prepare_level1_loader] split=%s: auto-built PyGDataLoader "
+        "from %d items (batch_size=%d, shuffle=%s).",
+        split_name,
+        len(valid_list),
+        batch_size,
+        shuffle,
+    )
+    return loader
+
+
+
+
+
+
+
 
 
 def _is_loader(obj: Any) -> bool:
@@ -489,15 +760,42 @@ class Level1Trainer:
         if valid_source is None:
             valid_source = valid_graphs
 
-        train_loader = _prepare_level1_loader(
-            train_source,
-            split="train",
-            batch_size=int(_cfg_get(self.cfg, "batch_size", 16)),
-            shuffle=True,
-            label_dict=label_dict,
-            loader_builder=loader_builder,
-            **kwargs,
-        )
+        # ── resolve batch_size & num_workers from cfg if available ──────────────
+        _batch_size   = getattr(self.cfg, "batch_size",   1)
+        _num_workers  = getattr(self.cfg, "num_workers",  0)
+
+        try:
+            train_loader = _prepare_level1_loader(
+                train_graphs,
+                split_name="train",
+                loader_builder=loader_builder,
+                batch_size=_batch_size,
+                shuffle=True,
+                num_workers=_num_workers,
+            )
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"[Level1Trainer.fit] Cannot build train_loader: {exc}\n"
+                f"  input type : {type(train_graphs).__name__}\n"
+                f"  input len  : {len(train_graphs) if hasattr(train_graphs, '__len__') else 'unknown'}\n"
+                "  → Pass `train_loader` directly or provide a compatible `loader_builder`."
+            ) from exc
+
+        try:
+            valid_loader = _prepare_level1_loader(
+                valid_graphs,
+                split_name="valid",
+                loader_builder=loader_builder,
+                batch_size=_batch_size,
+                shuffle=False,
+                num_workers=_num_workers,
+            ) if valid_graphs is not None else None
+        except (TypeError, ValueError) as exc:
+            _loader_log.warning(
+                "[Level1Trainer.fit] Cannot build valid_loader: %s. Validation will be skipped.", exc
+            )
+            valid_loader = None
+
 
         valid_loader = _prepare_level1_loader(
             valid_source,
