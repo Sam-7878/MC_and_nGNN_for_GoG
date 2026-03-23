@@ -17,7 +17,20 @@ class LegacyAdapterConfig:
     score_reduce: str = "mean"
     progress_every: int = 6
     agg_method: Optional[str] = None
- 
+    
+    # 아래 두 줄을 추가하여 yaml 설정값(kwargs)을 받을 수 있게 합니다.
+    topk: int = 3
+    normalize_score: bool = True
+
+    # 아래의 하이퍼파라미터 필드들을 추가합니다.
+    gpu: int = 0
+    hid_dim: int = 16
+    num_layers: int = 2
+    epoch: int = 20
+    lr: float = 0.003
+    weight_decay: float = 0.0
+    dropout: float = 0.0
+
     def __post_init__(self):
         if self.agg_method and not self.score_reduce:
             self.score_reduce = self.agg_method

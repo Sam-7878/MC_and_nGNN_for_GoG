@@ -439,9 +439,12 @@ def run_legacy_baselines(
         return
 
     batch = LegacyBatchRunner(
-        model_names=model_names,
-        base_cfg=base_adapter_cfg,
-    )
+        # model_names=model_names,
+        # base_cfg=base_adapter_cfg,
+        detector_overrides=base_adapter_cfg.detector_overrides,
+        score_reduce=base_adapter_cfg.score_reduce,
+        progress_every=base_adapter_cfg.progress_every)
+    
     all_scores = batch.run_all(test_graphs)
 
     for model_name, score_dict in all_scores.items():
@@ -608,7 +611,6 @@ def run_revision_l1_l2(
     l1_optimizer = _build_optimizer(l1_model, l1_cfg_raw)
     l1_trainer = Level1Trainer(model=l1_model, optimizer=l1_optimizer, cfg=l1_cfg)
     try:
-        # l1_trainer.fit(train_graphs=train_graphs, valid_graphs=valid_graphs, label_dict=dataset.labels)
         _call_level1_trainer_fit(
             l1_trainer,
             train_graphs=train_graphs,
@@ -626,13 +628,6 @@ def run_revision_l1_l2(
     valid_ids = _get_split_ids(dataset, "valid", "val")
 
     try:
-        # l2_trainer.fit(
-        #     l1_model=l1_model,
-        #     global_graph=dataset.global_graph,
-        #     train_ids=train_ids,
-        #     valid_ids=valid_ids,
-        #     label_dict=dataset.labels,
-        # )
         _call_level2_trainer_fit(
             l2_trainer,
             l1_model=l1_model,
@@ -643,7 +638,6 @@ def run_revision_l1_l2(
         )
 
     except TypeError:
-        # l2_trainer.fit(l1_model, dataset.global_graph, train_ids, valid_ids, dataset.labels)
         _call_level2_trainer_fit(
             l2_trainer,
             l1_model,
