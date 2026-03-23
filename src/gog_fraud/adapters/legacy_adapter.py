@@ -1,23 +1,12 @@
 # src/gog_fraud/adapters/legacy_adapter.py
-"""
-DOMINANT / DONE / GAE / AnomalyDAE / CoLA의 출력 score를
-contract 단위로 정규화하는 래퍼.
-
-모든 pygod detector는 node-level score를 반환하므로,
-graph/contract 단위로 집계(aggregate)하는 과정이 필요하다.
-
-지원 집계 방식
-  - "max"   : 그래프 내 노드 score의 최대값
-  - "mean"  : 평균
-  - "sum"   : 합산
-  - "topk"  : 상위 K개 평균
-"""
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import logging
-from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -25,286 +14,416 @@ from torch_geometric.data import Data
 
 log = logging.getLogger(__name__)
 
-AggMethod = Literal["max", "mean", "sum", "topk"]
-SUPPORTED_MODELS = ("DOMINANT", "DONE", "GAE", "AnomalyDAE", "CoLA")
 
-
-# src/gog_fraud/adapters/legacy_adapter.py
-
-from torch_geometric.data import Data
-import torch
-
-
-def _sanitize_pyg_graph(graph: Data) -> Data:
-    """
-    pygod에 넘기기 전에 Data를 tensor-only 형태로 정리한다.
-    """
-    if getattr(graph, "x", None) is None:
-        raise ValueError("Graph.x is missing")
-
-    x = graph.x
-    edge_index = graph.edge_index
-    edge_attr = getattr(graph, "edge_attr", None)
-
-    if not torch.is_tensor(x):
-        x = torch.tensor(x, dtype=torch.float)
-    else:
-        x = x.detach().cpu().float()
-
-    if not torch.is_tensor(edge_index):
-        edge_index = torch.tensor(edge_index, dtype=torch.long)
-    else:
-        edge_index = edge_index.detach().cpu().long()
-
-    if edge_attr is not None:
-        if not torch.is_tensor(edge_attr):
-            edge_attr = torch.tensor(edge_attr, dtype=torch.float)
-        else:
-            edge_attr = edge_attr.detach().cpu().float()
-
-    clean = Data(
-        x=x.contiguous(),
-        edge_index=edge_index.contiguous(),
-        edge_attr=edge_attr.contiguous() if edge_attr is not None else None,
-        num_nodes=int(x.size(0)),
-    )
-    return clean
-
-
-
-# ---------------------------------------------------------------------------
-# 설정
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
+# Public config expected by run_fraud_benchmark.py
+# ---------------------------------------------------------
 
 @dataclass
 class LegacyAdapterConfig:
-    model_name: str         = "DOMINANT"
-    agg_method: AggMethod   = "max"   # contract 단위 집계 방식
-    topk: int               = 3       # agg_method="topk" 일 때만 사용
-    normalize_score: bool   = True    # [0, 1]로 min-max 정규화
-    gpu: int                = -1      # -1=CPU, 0=GPU:0, ...
-    # pygod detector 공통 하이퍼파라미터
-    hid_dim: int            = 64
-    num_layers: int         = 2
-    epoch: int              = 100
-    lr: float               = 0.003
-    dropout: float          = 0.0
-    weight_decay: float     = 0.0
+    agg_method: str = "max"          # "max" | "mean" | "topk"
+    topk: int = 3
+    normalize_score: bool = True
+
+    gpu: int = -1
+    hid_dim: int = 64
+    num_layers: int = 2
+    epoch: int = 100
+    lr: float = 0.003
+
+    weight_decay: float = 0.0
+    dropout: float = 0.0
+    batch_size: int = 0
+
+    # optional extension
+    extra_kwargs: Dict[str, Any] = field(default_factory=dict)
 
 
-# ---------------------------------------------------------------------------
-# score 집계 함수
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
+# Supported detector registry
+# ---------------------------------------------------------
 
-def _aggregate_scores(
-    node_scores: np.ndarray,
-    method: AggMethod,
+_SUPPORTED_MODELS: Dict[str, str] = {
+    "DOMINANT": "pygod.detector.DOMINANT",
+    "DONE": "pygod.detector.DONE",
+    "GAE": "pygod.detector.GAE",
+    "AnomalyDAE": "pygod.detector.AnomalyDAE",
+    "CoLA": "pygod.detector.CoLA",
+    # Optional extras
+    "CONAD": "pygod.detector.CONAD",
+    "GUIDE": "pygod.detector.GUIDE",
+    "VGAE": "pygod.detector.VGAE",
+    "GAAN": "pygod.detector.GAAN",
+    "OCGNN": "pygod.detector.OCGNN",
+}
+
+
+# ---------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------
+
+def _import_detector_class(model_name: str):
+    if model_name not in _SUPPORTED_MODELS:
+        raise ValueError(
+            f"Unsupported legacy model: {model_name}. "
+            f"Supported={list(_SUPPORTED_MODELS.keys())}"
+        )
+
+    path = _SUPPORTED_MODELS[model_name]
+    module_name, class_name = path.rsplit(".", 1)
+    module = importlib.import_module(module_name)
+    return getattr(module, class_name)
+
+
+def _filter_kwargs_for_callable(cls: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Pass only kwargs accepted by the detector's __init__.
+    This avoids version-specific constructor mismatch.
+    """
+    try:
+        sig = inspect.signature(cls.__init__)
+        params = sig.parameters
+        accepts_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+        if accepts_var_kw:
+            return dict(kwargs)
+
+        allowed = set(params.keys()) - {"self"}
+        return {k: v for k, v in kwargs.items() if k in allowed}
+    except Exception:
+        return dict(kwargs)
+
+
+def _sanitize_tensor(x: torch.Tensor) -> torch.Tensor:
+    x = x.detach()
+    if not torch.is_floating_point(x):
+        return x
+    return torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _prepare_graph(graph: Data) -> Data:
+    """
+    Build a safe PyG Data object for legacy detectors.
+    """
+    if getattr(graph, "x", None) is None:
+        raise ValueError("Graph has no node feature 'x'")
+    if getattr(graph, "edge_index", None) is None:
+        raise ValueError("Graph has no 'edge_index'")
+
+    x = _sanitize_tensor(graph.x).float()
+    edge_index = graph.edge_index.detach().long()
+
+    g = Data(x=x, edge_index=edge_index)
+    g.num_nodes = int(getattr(graph, "num_nodes", x.size(0)))
+
+    if getattr(graph, "edge_attr", None) is not None:
+        g.edge_attr = _sanitize_tensor(graph.edge_attr).float()
+
+    # Some detectors internally expect y to exist.
+    y = getattr(graph, "y", None)
+    if y is None:
+        g.y = torch.zeros(g.num_nodes, dtype=torch.long)
+    else:
+        g.y = y.detach().long()
+
+    return g
+
+
+def _extract_contract_and_graph(item: Any, idx: int) -> Tuple[str, Data]:
+    """
+    Supports:
+      - object with .contract_id and .graph
+      - tuple(contract_id, graph)
+      - raw Data object
+    """
+    if hasattr(item, "contract_id") and hasattr(item, "graph"):
+        return str(item.contract_id), item.graph
+
+    if isinstance(item, tuple) and len(item) == 2:
+        cid, graph = item
+        return str(cid), graph
+
+    if isinstance(item, Data):
+        return f"graph_{idx}", item
+
+    raise TypeError(
+        f"Unsupported graph item type at index={idx}: {type(item)}"
+    )
+
+
+def _to_numpy_1d(x: Any) -> np.ndarray:
+    if isinstance(x, torch.Tensor):
+        arr = x.detach().cpu().numpy()
+    else:
+        arr = np.asarray(x)
+    return np.asarray(arr, dtype=np.float64).reshape(-1)
+
+
+def _aggregate_node_scores(
+    raw_scores: Any,
+    agg_method: str = "max",
     topk: int = 3,
 ) -> float:
-    """단일 그래프의 node score → contract score."""
-    if len(node_scores) == 0:
-        return 0.0
-    if method == "max":
-        return float(node_scores.max())
-    elif method == "mean":
-        return float(node_scores.mean())
-    elif method == "sum":
-        return float(node_scores.sum())
-    elif method == "topk":
-        k = min(topk, len(node_scores))
-        top = np.sort(node_scores)[::-1][:k]
+    """
+    Aggregate node anomaly scores into a single contract score.
+    Non-finite values are dropped before aggregation.
+    """
+    arr = _to_numpy_1d(raw_scores)
+    arr = arr[np.isfinite(arr)]
+
+    if arr.size == 0:
+        return float("nan")
+
+    if agg_method == "max":
+        return float(arr.max())
+
+    if agg_method == "mean":
+        return float(arr.mean())
+
+    if agg_method == "topk":
+        k = max(1, min(int(topk), int(arr.size)))
+        top = np.partition(arr, -k)[-k:]
         return float(top.mean())
-    else:
-        raise ValueError(f"Unknown agg_method: {method}")
+
+    raise ValueError(
+        f"Unknown agg_method={agg_method}. "
+        f"Use one of ['max', 'mean', 'topk']."
+    )
 
 
-def _minmax_normalize(scores: np.ndarray) -> np.ndarray:
-    mn, mx = scores.min(), scores.max()
-    if mx - mn < 1e-8:
-        return np.zeros_like(scores)
-    return (scores - mn) / (mx - mn)
-
-
-# ---------------------------------------------------------------------------
-# Legacy Model Runner
-# ---------------------------------------------------------------------------
-
-class LegacyModelRunner:
+def _safe_minmax_normalize(score_dict: Dict[str, float]) -> Dict[str, float]:
     """
-    단일 pygod detector 모델을 주어진 graph 리스트에 대해 실행하고
-    contract 단위 score를 반환한다.
+    NaN-safe min-max normalization.
 
-    Usage
-    -----
-    runner = LegacyModelRunner(cfg=LegacyAdapterConfig(model_name="DOMINANT"))
-    scores = runner.run(graphs)   # {contract_id: float}
+    Rules:
+      - drop non-finite scores first
+      - if all values are constant, return 0.0 for all
+      - else normal min-max scaling
     """
+    if not score_dict:
+        return {}
 
-    def __init__(self, cfg: LegacyAdapterConfig) -> None:
-        self.cfg = cfg
-        self._model = None
+    clean_items: List[Tuple[str, float]] = []
+    dropped: List[str] = []
 
-    def _build_model(self):
-        """pygod detector 인스턴스 생성."""
+    for cid, value in score_dict.items():
         try:
-            from pygod.detector import (
-                AnomalyDAE,
-                CoLA,
-                DOMINANT,
-                DONE,
-                GAE,
-            )
-        except ImportError as e:
-            raise ImportError(
-                "pygod is not installed. "
-                "Run: pip install pygod"
-            ) from e
+            fv = float(value)
+        except Exception:
+            fv = float("nan")
 
-        common = dict(
-            hid_dim    = self.cfg.hid_dim,
-            num_layers = self.cfg.num_layers,
-            epoch      = self.cfg.epoch,
-            lr         = self.cfg.lr,
-            dropout    = self.cfg.dropout,
-            weight_decay = self.cfg.weight_decay,
-            gpu        = self.cfg.gpu,
-            verbose    = 0,
+        if np.isfinite(fv):
+            clean_items.append((cid, fv))
+        else:
+            dropped.append(cid)
+
+    if dropped:
+        log.warning(
+            f"[LegacyAdapter] Dropping {len(dropped)} non-finite scores before "
+            f"normalization: {dropped[:10]}"
+            + ("..." if len(dropped) > 10 else "")
         )
 
-        model_map = {
-            "DOMINANT":   DOMINANT,
-            "DONE":       DONE,
-            "GAE":        GAE,
-            "AnomalyDAE": AnomalyDAE,
-            "CoLA":       CoLA,
-        }
+    if not clean_items:
+        return {}
 
-        name = self.cfg.model_name.upper()
-        if name not in model_map:
-            raise ValueError(
-                f"Unknown model: {name}. "
-                f"Supported: {list(model_map.keys())}"
+    values = np.asarray([v for _, v in clean_items], dtype=np.float64)
+    vmin = float(values.min())
+    vmax = float(values.max())
+    vrange = vmax - vmin
+
+    # Constant-score protection
+    if (not np.isfinite(vrange)) or vrange < 1e-12:
+        log.warning(
+            "[LegacyAdapter] All scores are constant during normalization. "
+            "Returning 0.0 for all contracts."
+        )
+        return {cid: 0.0 for cid, _ in clean_items}
+
+    return {cid: float((v - vmin) / vrange) for cid, v in clean_items}
+
+
+def _sanitize_score_dict(score_dict: Dict[str, float]) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    dropped = 0
+
+    for cid, value in score_dict.items():
+        try:
+            fv = float(value)
+        except Exception:
+            fv = float("nan")
+
+        if np.isfinite(fv):
+            out[cid] = fv
+        else:
+            dropped += 1
+
+    if dropped > 0:
+        log.warning(
+            f"[LegacyAdapter] Dropped {dropped} non-finite final scores."
+        )
+    return out
+
+
+# ---------------------------------------------------------
+# Internal single-model runner
+# ---------------------------------------------------------
+
+class _LegacySingleRunner:
+    def __init__(self, model_name: str, cfg: LegacyAdapterConfig):
+        self.model_name = str(model_name)
+        self.cfg = cfg
+        self.detector_cls = _import_detector_class(self.model_name)
+
+    def _build_detector(self):
+        raw_kwargs = {
+            "hid_dim": self.cfg.hid_dim,
+            "num_layers": self.cfg.num_layers,
+            "epoch": self.cfg.epoch,
+            "lr": self.cfg.lr,
+            "gpu": self.cfg.gpu,
+            "weight_decay": self.cfg.weight_decay,
+            "dropout": self.cfg.dropout,
+            "batch_size": self.cfg.batch_size,
+        }
+        raw_kwargs.update(self.cfg.extra_kwargs)
+
+        kwargs = _filter_kwargs_for_callable(self.detector_cls, raw_kwargs)
+
+        try:
+            return self.detector_cls(**kwargs)
+        except TypeError:
+            # Last-resort fallback for older pygod versions
+            fallback = {
+                k: v for k, v in kwargs.items()
+                if k in {"hid_dim", "num_layers", "epoch", "lr", "gpu"}
+            }
+            return self.detector_cls(**fallback)
+
+    def _score_one(self, contract_id: str, graph: Data) -> Optional[float]:
+        try:
+            g = _prepare_graph(graph)
+
+            if g.num_nodes < 2:
+                log.warning(
+                    f"[LegacyRunner:{self.model_name}] Skip {contract_id}: "
+                    f"num_nodes={g.num_nodes}"
+                )
+                return None
+
+            detector = self._build_detector()
+            detector.fit(g)
+
+            raw_scores = getattr(detector, "decision_scores_", None)
+            if raw_scores is None:
+                raise RuntimeError("detector.decision_scores_ is missing after fit()")
+
+            score = _aggregate_node_scores(
+                raw_scores,
+                agg_method=self.cfg.agg_method,
+                topk=self.cfg.topk,
             )
 
-        # 모델별 지원 파라미터가 다를 수 있으므로 방어적으로 생성
-        try:
-            return model_map[name](**common)
-        except TypeError:
-            # 일부 모델은 일부 파라미터 미지원
-            safe = {k: v for k, v in common.items()
-                    if k in ("hid_dim", "num_layers", "epoch", "lr", "gpu", "verbose")}
-            return model_map[name](**safe)
-
-    def run(
-        self,
-        transaction_graphs,   # List[TransactionGraph]
-        verbose: bool = True,
-    ) -> Dict[str, float]:
-        """
-        각 TransactionGraph를 독립적으로 detector에 입력하고
-        contract_id -> fraud_score 매핑을 반환.
-        """
-        from gog_fraud.data.io.transaction_loader import TransactionGraph
-
-        contract_scores: Dict[str, float] = {}
-        n = len(transaction_graphs)
-
-        for i, tg in enumerate(transaction_graphs):
-            if verbose and (i % max(1, n // 10) == 0):
-                log.info(
-                    f"[LegacyRunner:{self.cfg.model_name}] "
-                    f"{i}/{n} ({i/max(n,1):.0%})"
-                )
-
-            try:
-                score = self._run_single(tg.graph)
-                contract_scores[tg.contract_id] = score
-            except Exception as exc:
+            if not np.isfinite(score):
                 log.warning(
-                    f"[LegacyRunner] Skip contract={tg.contract_id}: {exc}"
+                    f"[LegacyRunner:{self.model_name}] Non-finite aggregated score "
+                    f"for {contract_id}; skipping."
                 )
-                contract_scores[tg.contract_id] = 0.0
+                return None
 
-        # 전체 정규화
-        if self.cfg.normalize_score and contract_scores:
-            arr = np.array(list(contract_scores.values()))
-            arr = _minmax_normalize(arr)
-            for cid, v in zip(contract_scores.keys(), arr):
-                contract_scores[cid] = float(v)
+            return float(score)
+
+        except Exception as exc:
+            log.warning(
+                f"[LegacyRunner:{self.model_name}] Skip {contract_id}: {exc}"
+            )
+            return None
+
+    def run(self, graph_items: Sequence[Any]) -> Dict[str, float]:
+        total = len(graph_items)
+        scores: Dict[str, float] = {}
+
+        if total == 0:
+            log.warning(f"[LegacyRunner:{self.model_name}] No graphs to score.")
+            return scores
+
+        log.info(f"[LegacyRunner:{self.model_name}] 0/{total} (0%)")
+
+        log_every = max(1, total // 10)
+        skipped = 0
+
+        for i, item in enumerate(graph_items):
+            cid, graph = _extract_contract_and_graph(item, i)
+            score = self._score_one(cid, graph)
+
+            if score is None:
+                skipped += 1
+            else:
+                scores[cid] = score
+
+            if ((i + 1) % log_every == 0) or ((i + 1) == total):
+                pct = int(((i + 1) / total) * 100)
+                log.info(
+                    f"[LegacyRunner:{self.model_name}] {i + 1}/{total} ({pct}%)"
+                )
 
         log.info(
-            f"[LegacyRunner:{self.cfg.model_name}] Done. "
-            f"Scored {len(contract_scores)} contracts."
+            f"[LegacyRunner:{self.model_name}] Done. "
+            f"Scored {len(scores)} contracts."
+            + (f" (skipped={skipped})" if skipped > 0 else "")
         )
-        return contract_scores
-
-    def _run_single(self, graph: Data) -> float:
-        model = self._build_model()
-
-        clean_graph = _sanitize_pyg_graph(graph)
-        model.fit(clean_graph)
-
-        node_scores = model.decision_score_
-        return _aggregate_scores(
-            node_scores,
-            method=self.cfg.agg_method,
-            topk=self.cfg.topk,
-        )
+        return scores
 
 
-
-# ---------------------------------------------------------------------------
-# 다중 모델 동시 실행 (batch runner)
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------
+# Public batch runner expected by run_fraud_benchmark.py
+# ---------------------------------------------------------
 
 class LegacyBatchRunner:
     """
-    DOMINANT, DONE, GAE, AnomalyDAE, CoLA 를 한 번에 실행하는 편의 클래스.
+    Interface expected by run_fraud_benchmark.py:
 
-    Usage
-    -----
-    batch = LegacyBatchRunner(
-        model_names=["DOMINANT", "DONE"],
-        base_cfg=LegacyAdapterConfig(),
-    )
-    all_scores = batch.run_all(graphs)
-    # all_scores["DOMINANT"] = {contract_id: float}
+        batch = LegacyBatchRunner(model_names=[...], base_cfg=LegacyAdapterConfig(...))
+        all_scores = batch.run_all(test_graphs)
+
+    Returns:
+        {
+            "DOMINANT": {contract_id: score, ...},
+            "DONE": {contract_id: score, ...},
+            ...
+        }
     """
-
-    DEFAULT_MODELS = list(SUPPORTED_MODELS)
 
     def __init__(
         self,
-        model_names: Optional[List[str]] = None,
-        base_cfg: Optional[LegacyAdapterConfig] = None,
+        model_names: Sequence[str],
+        base_cfg: LegacyAdapterConfig,
     ) -> None:
-        self.model_names = model_names or self.DEFAULT_MODELS
-        self.base_cfg = base_cfg or LegacyAdapterConfig()
+        self.model_names = [str(x) for x in model_names]
+        self.base_cfg = base_cfg
 
-    def run_all(
-        self,
-        transaction_graphs,
-        verbose: bool = True,
-    ) -> Dict[str, Dict[str, float]]:
-        """
-        Returns
-        -------
-        {model_name: {contract_id: score}}
-        """
-        results: Dict[str, Dict[str, float]] = {}
-        for name in self.model_names:
-            log.info(f"\n[LegacyBatchRunner] === Running {name} ===")
-            cfg = LegacyAdapterConfig(
-                model_name=name,
-                agg_method=self.base_cfg.agg_method,
-                topk=self.base_cfg.topk,
-                normalize_score=self.base_cfg.normalize_score,
-                gpu=self.base_cfg.gpu,
-                hid_dim=self.base_cfg.hid_dim,
-                num_layers=self.base_cfg.num_layers,
-                epoch=self.base_cfg.epoch,
-                lr=self.base_cfg.lr,
-            )
-            runner = LegacyModelRunner(cfg)
-            results[name] = runner.run(transaction_graphs, verbose=verbose)
-        return results
+    def run_all(self, graph_items: Sequence[Any]) -> Dict[str, Dict[str, float]]:
+        all_scores: Dict[str, Dict[str, float]] = {}
+
+        for model_name in self.model_names:
+            log.info(f"\n[LegacyBatchRunner] === Running {model_name} ===")
+
+            runner = _LegacySingleRunner(model_name=model_name, cfg=self.base_cfg)
+            score_dict = runner.run(graph_items)
+
+            # Final sanitize
+            score_dict = _sanitize_score_dict(score_dict)
+
+            # Safe normalization
+            if self.base_cfg.normalize_score:
+                score_dict = _safe_minmax_normalize(score_dict)
+
+            all_scores[model_name] = score_dict
+
+        return all_scores
+
+
+__all__ = [
+    "LegacyAdapterConfig",
+    "LegacyBatchRunner",
+]

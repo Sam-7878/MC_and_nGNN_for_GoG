@@ -1,5 +1,9 @@
-from dataclasses import dataclass
 from typing import Optional
+from dataclasses import asdict, dataclass, fields, is_dataclass
+from dataclasses import dataclass as _dc, field as _field
+from types import SimpleNamespace
+from typing import Any, Mapping, Dict
+import inspect
 
 import torch
 import torch.nn.functional as F
@@ -13,8 +17,49 @@ from gog_fraud.common.types import Level1Output
 # Output type for Level 2
 # ──────────────────────────────────────────────
 
-from dataclasses import dataclass as _dc, field as _field
-from typing import Any, Dict
+
+
+def _cfg_to_plain_dict(cfg: Any) -> dict:
+    if cfg is None:
+        return {}
+
+    if isinstance(cfg, dict):
+        return dict(cfg)
+
+    if is_dataclass(cfg):
+        return asdict(cfg)
+
+    if hasattr(cfg, "items"):
+        try:
+            return dict(cfg.items())
+        except Exception:
+            pass
+
+    if hasattr(cfg, "__dict__"):
+        return {
+            k: v
+            for k, v in vars(cfg).items()
+            if not k.startswith("_")
+        }
+
+    raise TypeError(f"Unsupported config type: {type(cfg)}")
+
+
+def _filter_kwargs_for_cls_init(cls, data: dict) -> dict:
+    try:
+        sig = inspect.signature(cls.__init__)
+        params = sig.parameters
+        accepts_var_kw = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD
+            for p in params.values()
+        )
+        if accepts_var_kw:
+            return dict(data)
+
+        allowed = set(params.keys()) - {"self"}
+        return {k: v for k, v in data.items() if k in allowed}
+    except Exception:
+        return dict(data)
 
 
 @_dc
@@ -41,6 +86,25 @@ class Level2ModelConfig:
     edge_dim:        int  = 0      # 0 = no edge feature
     readout:         str  = "meanmax"
     out_dim:         int  = 1
+
+    @classmethod
+    def from_config(cls, cfg: Any) -> "Level2ModelConfig":
+        if isinstance(cfg, cls):
+            return cfg
+
+        data = _cfg_to_plain_dict(cfg)
+
+        # 흔한 alias 보정
+        if "hidden_dim" in data and "hid_dim" not in data:
+            data["hid_dim"] = data["hidden_dim"]
+        if "num_layer" in data and "num_layers" not in data:
+            data["num_layers"] = data["num_layer"]
+        if "lr" in data and "learning_rate" not in data:
+            data["learning_rate"] = data["lr"]
+
+        valid = {f.name for f in fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in valid}
+        return cls(**filtered)
 
 
 # ──────────────────────────────────────────────
@@ -241,3 +305,50 @@ class Level2Model(nn.Module):
                 "output_dim": self.output_dim,
             },
         )
+
+    @classmethod
+    def from_config(cls, cfg: Any) -> "Level2Model":
+        cfg_obj = Level2ModelConfig.from_config(cfg)
+
+        # 1순위: 생성자가 config 객체를 직접 받는 경우
+        try:
+            return cls(cfg_obj)
+        except TypeError:
+            pass
+
+        # 2순위: 생성자가 kwargs를 받는 경우
+        data = asdict(cfg_obj)
+        kwargs = _filter_kwargs_for_cls_init(cls, data)
+
+        try:
+            return cls(**kwargs)
+        except TypeError as e:
+            raise TypeError(
+                f"{cls.__name__}.from_config() failed. "
+                f"Config keys={list(data.keys())}, filtered={list(kwargs.keys())}, error={e}"
+            ) from e
+
+    @torch.no_grad()
+    def predict(self, *args, **kwargs):
+        self.eval()
+        out = self.forward(*args, **kwargs)
+
+        if hasattr(out, "score"):
+            score = out.score
+        elif isinstance(out, dict):
+            score = (
+                out.get("score", None)
+                or out.get("anomaly_score", None)
+                or out.get("logit", None)
+                or out.get("logits", None)
+            )
+            if score is None:
+                raise KeyError("predict/forward output has no score-like key")
+        else:
+            score = out
+
+        if not torch.is_tensor(score):
+            score = torch.tensor(score, dtype=torch.float32)
+
+        score = score.reshape(-1)
+        return SimpleNamespace(score=score)

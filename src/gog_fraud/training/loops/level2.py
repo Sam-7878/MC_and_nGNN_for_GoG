@@ -5,6 +5,53 @@ import torch
 from torch.amp import GradScaler, autocast
 
 
+
+import copy
+import inspect
+import logging
+
+log = logging.getLogger(__name__)
+
+
+def _cfg_get(cfg, key, default=None):
+    if cfg is None:
+        return default
+    if isinstance(cfg, dict):
+        return cfg.get(key, default)
+    return getattr(cfg, key, default)
+
+
+def _call_compatible(fn, **kwargs):
+    sig = inspect.signature(fn)
+    params = sig.parameters
+
+    has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    if has_var_kw:
+        return fn(**kwargs)
+
+    filtered = {k: v for k, v in kwargs.items() if k in params}
+    return fn(**filtered)
+
+
+def _extract_monitor_value(eval_out):
+    if eval_out is None:
+        return None, None, None
+
+    if isinstance(eval_out, (int, float)):
+        return float(eval_out), "min", "loss"
+
+    if isinstance(eval_out, dict):
+        for key in ("loss", "val_loss", "avg_loss", "mean_loss"):
+            if key in eval_out and eval_out[key] is not None:
+                return float(eval_out[key]), "min", key
+
+        for key in ("f1", "macro_f1", "auc", "roc_auc", "pr_auc", "ap", "accuracy", "acc"):
+            if key in eval_out and eval_out[key] is not None:
+                return float(eval_out[key]), "max", key
+
+    return None, None, None
+
+
 @dataclass
 class Level2TrainerConfig:
     lr:               float = 3e-4
@@ -166,3 +213,183 @@ class Level2Trainer:
         metrics = compute_level2_metrics(all_y, all_score)
         metrics["loss"] = total_loss / max(len(loader), 1)
         return metrics
+
+    def fit(self, l1_model, global_graph, train_ids, valid_ids=None, label_dict=None, **kwargs):
+        train_ids = train_ids or []
+        valid_ids = valid_ids or []
+
+        epochs = int(_cfg_get(self.cfg, "epochs", _cfg_get(self.cfg, "max_epochs", 10)))
+        eval_every = int(_cfg_get(self.cfg, "eval_every", 1))
+        patience = _cfg_get(self.cfg, "patience", None)
+        load_best_at_end = bool(_cfg_get(self.cfg, "load_best_at_end", True))
+
+        history = []
+        best_score = None
+        best_mode = None
+        best_metric = None
+        best_state = None
+        no_improve = 0
+
+        for epoch in range(1, epochs + 1):
+            train_out = None
+            last_exc = None
+
+            train_variants = [
+                dict(
+                    l1_model=l1_model,
+                    global_graph=global_graph,
+                    train_ids=train_ids,
+                    label_dict=label_dict,
+                    epoch=epoch,
+                    **kwargs,
+                ),
+                dict(
+                    level1_model=l1_model,
+                    global_graph=global_graph,
+                    train_ids=train_ids,
+                    label_dict=label_dict,
+                    epoch=epoch,
+                    **kwargs,
+                ),
+                dict(
+                    l1_model=l1_model,
+                    graph=global_graph,
+                    train_ids=train_ids,
+                    label_dict=label_dict,
+                    epoch=epoch,
+                    **kwargs,
+                ),
+                dict(
+                    l1_model=l1_model,
+                    global_graph=global_graph,
+                    ids=train_ids,
+                    label_dict=label_dict,
+                    epoch=epoch,
+                    **kwargs,
+                ),
+                dict(
+                    l1_model=l1_model,
+                    global_graph=global_graph,
+                    contract_ids=train_ids,
+                    label_dict=label_dict,
+                    epoch=epoch,
+                    **kwargs,
+                ),
+            ]
+
+            for var in train_variants:
+                try:
+                    train_out = _call_compatible(self.train_one_epoch, **var)
+                    break
+                except TypeError as exc:
+                    last_exc = exc
+
+            if train_out is None and last_exc is not None:
+                raise last_exc
+
+            row = {"epoch": epoch, "train": train_out}
+
+            if valid_ids and (epoch % eval_every == 0):
+                valid_out = None
+                last_exc = None
+
+                eval_variants = [
+                    dict(
+                        l1_model=l1_model,
+                        global_graph=global_graph,
+                        valid_ids=valid_ids,
+                        label_dict=label_dict,
+                        epoch=epoch,
+                        **kwargs,
+                    ),
+                    dict(
+                        level1_model=l1_model,
+                        global_graph=global_graph,
+                        valid_ids=valid_ids,
+                        label_dict=label_dict,
+                        epoch=epoch,
+                        **kwargs,
+                    ),
+                    dict(
+                        l1_model=l1_model,
+                        graph=global_graph,
+                        valid_ids=valid_ids,
+                        label_dict=label_dict,
+                        epoch=epoch,
+                        **kwargs,
+                    ),
+                    dict(
+                        l1_model=l1_model,
+                        global_graph=global_graph,
+                        ids=valid_ids,
+                        label_dict=label_dict,
+                        epoch=epoch,
+                        **kwargs,
+                    ),
+                    dict(
+                        l1_model=l1_model,
+                        global_graph=global_graph,
+                        contract_ids=valid_ids,
+                        label_dict=label_dict,
+                        epoch=epoch,
+                        **kwargs,
+                    ),
+                ]
+
+                for var in eval_variants:
+                    try:
+                        valid_out = _call_compatible(self.evaluate, **var)
+                        break
+                    except TypeError as exc:
+                        last_exc = exc
+
+                if valid_out is None and last_exc is not None:
+                    raise last_exc
+
+                row["valid"] = valid_out
+
+                score, mode, metric = _extract_monitor_value(valid_out)
+                if score is not None:
+                    improved = (
+                        best_score is None
+                        or (mode == "min" and score < best_score)
+                        or (mode == "max" and score > best_score)
+                    )
+
+                    if improved:
+                        best_score = score
+                        best_mode = mode
+                        best_metric = metric
+                        best_state = copy.deepcopy(self.model.state_dict())
+                        no_improve = 0
+                    else:
+                        no_improve += 1
+
+            history.append(row)
+
+            if patience is not None and valid_ids:
+                if no_improve >= int(patience):
+                    log.info(
+                        "[Level2Trainer] Early stopping at epoch %d (metric=%s, best=%s)",
+                        epoch,
+                        best_metric,
+                        best_score,
+                    )
+                    break
+
+        if best_state is not None and load_best_at_end:
+            self.model.load_state_dict(best_state)
+
+        self.history = history
+        self.best_score = best_score
+        self.best_metric = best_metric
+        self.best_mode = best_mode
+
+        return {
+            "history": history,
+            "best_score": best_score,
+            "best_metric": best_metric,
+            "best_mode": best_mode,
+            "epochs_ran": len(history),
+        }
+

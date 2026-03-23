@@ -1,440 +1,644 @@
 # src/gog_fraud/evaluation/benchmark.py
 """
-Benchmark metric 계산 및 결과 정리.
+NaN-safe benchmark evaluation module.
 
-지원 Metric:
-  - ROC-AUC
-  - PR-AUC
-  - F1 / Precision / Recall
-  - Confusion Matrix
-  - Ranking Metrics (NDCG@K, Precision@K, Recall@K)
-  - 신뢰구간 (bootstrap)
+Public API (expected by run_fraud_benchmark.py):
+    BenchmarkResult   - single model × single setting 결과 dataclass
+    BenchmarkTable    - 여러 BenchmarkResult 누적 / 출력 / CSV 저장
+    evaluate_benchmark(...) -> BenchmarkResult
 """
 
 from __future__ import annotations
 
 import logging
-import math
-import random
 import warnings
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from dataclasses import asdict, dataclass, field, fields
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
-import torch
+
+# sklearn imports – all wrapped to avoid cascade failures
+try:
+    from sklearn.metrics import (
+        accuracy_score,
+        average_precision_score,
+        f1_score,
+        precision_recall_curve,
+        precision_score,
+        recall_score,
+        roc_auc_score,
+    )
+    _SKLEARN_AVAILABLE = True
+except ImportError:
+    _SKLEARN_AVAILABLE = False
 
 log = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# 결과 컨테이너
-# ---------------------------------------------------------------------------
+# ============================================================
+# 1. BenchmarkResult
+# ============================================================
 
 @dataclass
 class BenchmarkResult:
-    model_name: str
-    setting: str                         # "strict" / "full_system" 등
+    """
+    한 모델 × 한 setting의 평가 결과.
 
-    # 주요 metric
-    roc_auc: float = 0.0
-    pr_auc: float  = 0.0
-    f1: float      = 0.0
-    precision: float = 0.0
-    recall: float    = 0.0
-    specificity: float = 0.0
-    accuracy: float    = 0.0
-    bce_loss: float    = 0.0
+    run_fraud_benchmark.py 는 이 필드들을 직접 접근합니다:
+        result.roc_auc
+        result.pr_auc
+        result.best_f1
+        result.best_threshold
+        result.f1_at_05
+        result.precision_at_05
+        result.recall_at_05
+        result.accuracy_at_05
+        result.p_at_k   (dict: {k: float})
+        result.r_at_k   (dict: {k: float})
+        result.num_samples
+        result.num_pos
+        result.num_neg
+        result.num_dropped
+        result.model_name
+        result.setting
+        result.ci_roc_auc  (Optional bootstrap 구간)
+        result.ci_pr_auc   (Optional bootstrap 구간)
+    """
 
-    # confusion matrix 원소
-    tp: int = 0
-    tn: int = 0
-    fp: int = 0
-    fn: int = 0
+    # ─── Identity ────────────────────────────────────────
+    model_name: str = ""
+    setting: str = ""
 
-    # ranking metric
-    ndcg_at_k: Dict[int, float] = field(default_factory=dict)   # {K: value}
-    precision_at_k: Dict[int, float] = field(default_factory=dict)
-    recall_at_k: Dict[int, float] = field(default_factory=dict)
+    # ─── Core metrics ────────────────────────────────────
+    roc_auc: float = float("nan")
+    pr_auc: float = float("nan")
 
-    # 신뢰구간 (bootstrap)
-    roc_auc_ci: Optional[Tuple[float, float]] = None
-    pr_auc_ci:  Optional[Tuple[float, float]] = None
+    # Best-F1 (from PR curve sweep)
+    best_f1: float = float("nan")
+    best_threshold: float = float("nan")
 
-    # 메타
-    n_samples: int = 0
-    fraud_rate: float = 0.0
-    threshold: float  = 0.5
-    extra: Dict = field(default_factory=dict)
+    # Fixed-threshold metrics (default threshold=0.5)
+    f1_at_05: float = float("nan")
+    precision_at_05: float = float("nan")
+    recall_at_05: float = float("nan")
+    accuracy_at_05: float = float("nan")
 
-    # ------------------------------------------------------------------
-    def to_dict(self) -> Dict:
-        d = {
-            "model":       self.model_name,
-            "setting":     self.setting,
-            "roc_auc":     round(self.roc_auc,   4),
-            "pr_auc":      round(self.pr_auc,    4),
-            "f1":          round(self.f1,         4),
-            "precision":   round(self.precision,  4),
-            "recall":      round(self.recall,     4),
-            "specificity": round(self.specificity,4),
-            "accuracy":    round(self.accuracy,   4),
-            "bce_loss":    round(self.bce_loss,   4),
-            "tp": self.tp, "tn": self.tn,
-            "fp": self.fp, "fn": self.fn,
-            "n_samples":   self.n_samples,
-            "fraud_rate":  round(self.fraud_rate, 4),
-            "threshold":   self.threshold,
-        }
-        for k, v in self.ndcg_at_k.items():
-            d[f"ndcg@{k}"] = round(v, 4)
-        for k, v in self.precision_at_k.items():
-            d[f"precision@{k}"] = round(v, 4)
-        for k, v in self.recall_at_k.items():
-            d[f"recall@{k}"] = round(v, 4)
-        if self.roc_auc_ci:
-            d["roc_auc_ci_lo"] = round(self.roc_auc_ci[0], 4)
-            d["roc_auc_ci_hi"] = round(self.roc_auc_ci[1], 4)
-        if self.pr_auc_ci:
-            d["pr_auc_ci_lo"] = round(self.pr_auc_ci[0], 4)
-            d["pr_auc_ci_hi"] = round(self.pr_auc_ci[1], 4)
+    # Precision/Recall @ K (dict keyed by k)
+    p_at_k: Dict[int, float] = field(default_factory=dict)
+    r_at_k: Dict[int, float] = field(default_factory=dict)
+
+    # ─── Data stats ──────────────────────────────────────
+    num_samples: int = 0
+    num_pos: int = 0
+    num_neg: int = 0
+    num_dropped: int = 0
+
+    # ─── Bootstrap confidence intervals ──────────────────
+    ci_roc_auc: Optional[Tuple[float, float]] = None
+    ci_pr_auc: Optional[Tuple[float, float]] = None
+
+    # ─── Serialization ───────────────────────────────────
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        # Flatten p_at_k / r_at_k for CSV export
+        for k, v in self.p_at_k.items():
+            d[f"p@{k}"] = v
+        for k, v in self.r_at_k.items():
+            d[f"r@{k}"] = v
+        # Flatten CI tuples
+        if self.ci_roc_auc is not None:
+            d["ci_roc_auc_lo"] = self.ci_roc_auc[0]
+            d["ci_roc_auc_hi"] = self.ci_roc_auc[1]
+        if self.ci_pr_auc is not None:
+            d["ci_pr_auc_lo"] = self.ci_pr_auc[0]
+            d["ci_pr_auc_hi"] = self.ci_pr_auc[1]
         return d
 
-    def __str__(self) -> str:
+    def pretty(self) -> str:
+        sep = "─" * 52
         lines = [
-            f"[{self.model_name}] ({self.setting})",
-            f"  ROC-AUC={self.roc_auc:.4f}  PR-AUC={self.pr_auc:.4f}",
-            f"  F1={self.f1:.4f}  Prec={self.precision:.4f}  Rec={self.recall:.4f}",
-            f"  Acc={self.accuracy:.4f}  Spec={self.specificity:.4f}",
-            f"  TP={self.tp} TN={self.tn} FP={self.fp} FN={self.fn}",
-            f"  n={self.n_samples}  fraud_rate={self.fraud_rate:.2%}",
+            sep,
+            f"  Model   : {self.model_name}",
+            f"  Setting : {self.setting}",
+            sep,
+            f"  ROC-AUC : {self.roc_auc:.4f}"
+            + (
+                f"  [{self.ci_roc_auc[0]:.4f}, {self.ci_roc_auc[1]:.4f}]"
+                if self.ci_roc_auc else ""
+            ),
+            f"  PR-AUC  : {self.pr_auc:.4f}"
+            + (
+                f"  [{self.ci_pr_auc[0]:.4f}, {self.ci_pr_auc[1]:.4f}]"
+                if self.ci_pr_auc else ""
+            ),
+            f"  Best-F1 : {self.best_f1:.4f}  (thr={self.best_threshold:.4f})",
+            f"  F1@0.5  : {self.f1_at_05:.4f}  "
+            f"P={self.precision_at_05:.4f}  R={self.recall_at_05:.4f}",
+            f"  ACC@0.5 : {self.accuracy_at_05:.4f}",
         ]
-        if self.ndcg_at_k:
-            ndcg_str = "  NDCG@K: " + ", ".join(
-                f"@{k}={v:.4f}" for k, v in sorted(self.ndcg_at_k.items())
+        if self.p_at_k:
+            pk_str = "  ".join(
+                f"P@{k}={v:.4f}" for k, v in sorted(self.p_at_k.items())
             )
-            lines.append(ndcg_str)
-        if self.roc_auc_ci:
-            lines.append(
-                f"  ROC-AUC 95% CI=({self.roc_auc_ci[0]:.4f}, {self.roc_auc_ci[1]:.4f})"
+            lines.append(f"  {pk_str}")
+        if self.r_at_k:
+            rk_str = "  ".join(
+                f"R@{k}={v:.4f}" for k, v in sorted(self.r_at_k.items())
             )
+            lines.append(f"  {rk_str}")
+        lines += [
+            sep,
+            f"  Samples : {self.num_samples}  "
+            f"(+{self.num_pos}  -{self.num_neg}  dropped={self.num_dropped})",
+            sep,
+        ]
         return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
+# ============================================================
+# 2. BenchmarkTable
+# ============================================================
 
-def _safe_div(a: float, b: float, default: float = 0.0) -> float:
-    return a / b if b > 0 else default
+class BenchmarkTable:
+    """
+    여러 BenchmarkResult를 누적하고
+    콘솔 출력 / CSV 저장을 제공.
 
+    run_fraud_benchmark.py 사용 패턴:
+        table = BenchmarkTable()
+        table.add(result)
+        table.print_summary()
+        table.save_csv(output_dir / "benchmark_results.csv")
+    """
 
-def _ensure_numpy(x) -> np.ndarray:
-    if isinstance(x, torch.Tensor):
-        return x.detach().cpu().float().numpy()
-    return np.asarray(x, dtype=np.float32)
+    def __init__(self) -> None:
+        self._results: List[BenchmarkResult] = []
 
+    # ─── Mutation ────────────────────────────────────────
 
-# ---------------------------------------------------------------------------
-# 핵심 metric 함수
-# ---------------------------------------------------------------------------
+    def add(self, result: BenchmarkResult) -> None:
+        self._results.append(result)
 
-def compute_roc_auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
-    unique = np.unique(y_true)
-    if len(unique) < 2:
-        return 0.0
-    from sklearn.metrics import roc_auc_score
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        return float(roc_auc_score(y_true, y_score))
+    def add_all(self, results: Iterable[BenchmarkResult]) -> None:
+        for r in results:
+            self._results.append(r)
 
+    # ─── Access ──────────────────────────────────────────
 
-def compute_pr_auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
-    if int(y_true.sum()) == 0:
-        return 0.0
-    from sklearn.metrics import average_precision_score
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        return float(average_precision_score(y_true, y_score))
+    def __len__(self) -> int:
+        return len(self._results)
 
+    def __iter__(self):
+        return iter(self._results)
 
-def compute_confusion(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-) -> Tuple[int, int, int, int]:
-    """Returns (TP, TN, FP, FN)."""
-    tp = int(((y_pred == 1) & (y_true == 1)).sum())
-    tn = int(((y_pred == 0) & (y_true == 0)).sum())
-    fp = int(((y_pred == 1) & (y_true == 0)).sum())
-    fn = int(((y_pred == 0) & (y_true == 1)).sum())
-    return tp, tn, fp, fn
+    def results(self) -> List[BenchmarkResult]:
+        return list(self._results)
 
+    def get_by_model(self, model_name: str) -> List[BenchmarkResult]:
+        return [r for r in self._results if r.model_name == model_name]
 
-def compute_ndcg_at_k(
-    y_true: np.ndarray,
-    y_score: np.ndarray,
-    k: int,
-) -> float:
-    """NDCG@K: anomaly/fraud 탐지 ranking 성능."""
-    n = len(y_score)
-    if n == 0 or k <= 0:
-        return 0.0
-    k = min(k, n)
+    def get_by_setting(self, setting: str) -> List[BenchmarkResult]:
+        return [r for r in self._results if r.setting == setting]
 
-    sorted_idx = np.argsort(y_score)[::-1]
-    top_k_labels = y_true[sorted_idx[:k]]
+    # ─── Output ──────────────────────────────────────────
 
-    # DCG
-    dcg = sum(
-        rel / math.log2(rank + 2)
-        for rank, rel in enumerate(top_k_labels)
-    )
+    def print_summary(self) -> None:
+        if not self._results:
+            print("[BenchmarkTable] No results to display.")
+            return
 
-    # Ideal DCG (perfect ranking: all frauds first)
-    n_fraud = int(y_true.sum())
-    ideal_k = min(k, n_fraud)
-    idcg = sum(1.0 / math.log2(rank + 2) for rank in range(ideal_k))
+        header = (
+            f"{'Model':<25} {'Setting':<18} "
+            f"{'ROC-AUC':>8} {'PR-AUC':>8} "
+            f"{'Best-F1':>8} {'F1@0.5':>8} "
+            f"{'Pos':>5} {'Neg':>5} {'Drop':>5}"
+        )
+        sep = "─" * len(header)
+        lines = [sep, header, sep]
 
-    return _safe_div(dcg, idcg)
+        for r in self._results:
+            lines.append(
+                f"{r.model_name:<25} {r.setting:<18} "
+                f"{_fmt(r.roc_auc):>8} {_fmt(r.pr_auc):>8} "
+                f"{_fmt(r.best_f1):>8} {_fmt(r.f1_at_05):>8} "
+                f"{r.num_pos:>5} {r.num_neg:>5} {r.num_dropped:>5}"
+            )
 
+        lines.append(sep)
+        print("\n".join(lines))
 
-def compute_precision_at_k(
-    y_true: np.ndarray,
-    y_score: np.ndarray,
-    k: int,
-) -> float:
-    n = len(y_score)
-    if n == 0 or k <= 0:
-        return 0.0
-    k = min(k, n)
-    sorted_idx = np.argsort(y_score)[::-1]
-    top_k = y_true[sorted_idx[:k]]
-    return float(top_k.sum()) / k
+    def save_csv(self, path: str | Path) -> None:
+        import csv
 
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-def compute_recall_at_k(
-    y_true: np.ndarray,
-    y_score: np.ndarray,
-    k: int,
-) -> float:
-    n = len(y_score)
-    if n == 0 or k <= 0:
-        return 0.0
-    k = min(k, n)
-    n_fraud = int(y_true.sum())
-    if n_fraud == 0:
-        return 0.0
-    sorted_idx = np.argsort(y_score)[::-1]
-    top_k = y_true[sorted_idx[:k]]
-    return float(top_k.sum()) / n_fraud
+        if not self._results:
+            log.warning("[BenchmarkTable] save_csv called but no results exist.")
+            return
+
+        rows = [r.to_dict() for r in self._results]
+
+        # Collect all keys in order
+        all_keys: List[str] = []
+        seen = set()
+        for row in rows:
+            for k in row.keys():
+                if k not in seen:
+                    all_keys.append(k)
+                    seen.add(k)
+
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=all_keys, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: row.get(k, "") for k in all_keys})
+
+        log.info(f"[BenchmarkTable] Saved {len(rows)} rows → {path}")
 
 
-# ---------------------------------------------------------------------------
-# Bootstrap 신뢰구간
-# ---------------------------------------------------------------------------
+def _fmt(v: float, decimals: int = 4) -> str:
+    if v is None or (isinstance(v, float) and not np.isfinite(v)):
+        return "  N/A"
+    return f"{v:.{decimals}f}"
 
-def bootstrap_ci(
-    y_true: np.ndarray,
-    y_score: np.ndarray,
-    metric_fn,
-    n_bootstrap: int = 500,
-    ci: float = 0.95,
-    seed: int = 42,
+
+# ============================================================
+# 3. Internal calculation helpers
+# ============================================================
+
+def _to_numpy_1d_int(x: Any) -> np.ndarray:
+    return np.asarray(x, dtype=np.int64).reshape(-1)
+
+
+def _to_numpy_1d_float(x: Any) -> np.ndarray:
+    return np.asarray(x, dtype=np.float64).reshape(-1)
+
+
+def _sanitize(
+    y_true: Any,
+    y_score: Any,
+) -> Tuple[np.ndarray, np.ndarray, int]:
+    """
+    핵심 NaN-safe 전처리.
+
+    1. 배열로 변환
+    2. 길이 검증
+    3. y_score에서 non-finite 제거 (NaN/Inf)
+    4. 제거 수(dropped) 반환
+    """
+    yt = _to_numpy_1d_int(y_true)
+    ys = _to_numpy_1d_float(y_score)
+
+    if yt.shape[0] != ys.shape[0]:
+        raise ValueError(
+            f"[Benchmark] len(y_true)={yt.shape[0]} ≠ len(y_score)={ys.shape[0]}"
+        )
+
+    mask = np.isfinite(ys)
+    dropped = int((~mask).sum())
+
+    if dropped > 0:
+        log.warning(
+            f"[Benchmark] Dropping {dropped} non-finite y_score entries (NaN/Inf)."
+        )
+
+    return yt[mask], ys[mask], dropped
+
+
+def _has_two_classes(yt: np.ndarray, metric_name: str = "") -> bool:
+    if np.unique(yt).size < 2:
+        log.warning(
+            f"[Benchmark] {metric_name} undefined – y_true has only one class "
+            f"(pos={int((yt==1).sum())}, neg={int((yt==0).sum())})."
+        )
+        return False
+    return True
+
+
+def _binarize(ys: np.ndarray, threshold: float) -> np.ndarray:
+    return (ys >= threshold).astype(np.int64)
+
+
+def _calc_roc_auc(yt: np.ndarray, ys: np.ndarray) -> float:
+    if not _has_two_classes(yt, "ROC-AUC"):
+        return float("nan")
+    try:
+        return float(roc_auc_score(yt, ys))
+    except Exception as e:
+        log.warning(f"[Benchmark] ROC-AUC failed: {e}")
+        return float("nan")
+
+
+def _calc_pr_auc(yt: np.ndarray, ys: np.ndarray) -> float:
+    if not _has_two_classes(yt, "PR-AUC"):
+        return float("nan")
+    try:
+        return float(average_precision_score(yt, ys))
+    except Exception as e:
+        log.warning(f"[Benchmark] PR-AUC failed: {e}")
+        return float("nan")
+
+
+def _calc_best_f1(
+    yt: np.ndarray,
+    ys: np.ndarray,
 ) -> Tuple[float, float]:
-    rng = np.random.default_rng(seed)
-    n = len(y_true)
-    values = []
-    for _ in range(n_bootstrap):
+    """
+    PR curve 전 구간에서 best F1과 그 threshold.
+    """
+    if not _has_two_classes(yt, "best-F1"):
+        return float("nan"), float("nan")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            precision, recall, thresholds = precision_recall_curve(yt, ys)
+
+        if len(thresholds) == 0:
+            yp = _binarize(ys, threshold=0.5)
+            return float(f1_score(yt, yp, zero_division=0)), 0.5
+
+        # sklearn: precision/recall 배열은 threshold 배열보다 1 길다
+        precision = precision[:-1]
+        recall = recall[:-1]
+
+        denom = precision + recall
+        f1 = np.where(
+            denom > 0,
+            2 * precision * recall / denom,
+            0.0,
+        )
+
+        best_idx = int(np.argmax(f1))
+        return float(f1[best_idx]), float(thresholds[best_idx])
+
+    except Exception as e:
+        log.warning(f"[Benchmark] best-F1 failed: {e}")
+        return float("nan"), float("nan")
+
+
+def _calc_p_at_k(yt: np.ndarray, ys: np.ndarray, k: int) -> float:
+    n = len(yt)
+    if n == 0:
+        return float("nan")
+    k = max(1, min(k, n))
+    order = np.argsort(-ys)
+    topk = order[:k]
+    tp = int((yt[topk] == 1).sum())
+    return float(tp / k)
+
+
+def _calc_r_at_k(yt: np.ndarray, ys: np.ndarray, k: int) -> float:
+    n = len(yt)
+    num_pos = int((yt == 1).sum())
+    if n == 0 or num_pos == 0:
+        return float("nan")
+    k = max(1, min(k, n))
+    order = np.argsort(-ys)
+    topk = order[:k]
+    tp = int((yt[topk] == 1).sum())
+    return float(tp / num_pos)
+
+
+# ============================================================
+# 4. Bootstrap helpers
+# ============================================================
+
+def _bootstrap_ci(
+    yt: np.ndarray,
+    ys: np.ndarray,
+    metric_fn,
+    n_boot: int = 200,
+    alpha: float = 0.05,
+    rng_seed: int = 42,
+) -> Tuple[float, float]:
+    """
+    metric_fn(yt, ys) → float のbootstrap 신뢰구간.
+    """
+    rng = np.random.default_rng(rng_seed)
+    n = len(yt)
+    boot_vals: List[float] = []
+
+    for _ in range(n_boot):
         idx = rng.integers(0, n, size=n)
-        yt, ys = y_true[idx], y_score[idx]
+        yt_b = yt[idx]
+        ys_b = ys[idx]
+        if np.unique(yt_b).size < 2:
+            continue
         try:
-            values.append(metric_fn(yt, ys))
+            v = metric_fn(yt_b, ys_b)
+            if np.isfinite(v):
+                boot_vals.append(v)
         except Exception:
             pass
 
-    if not values:
-        return 0.0, 0.0
+    if len(boot_vals) < 10:
+        return float("nan"), float("nan")
 
-    alpha = (1 - ci) / 2
-    lo = float(np.quantile(values, alpha))
-    hi = float(np.quantile(values, 1 - alpha))
+    arr = np.array(boot_vals)
+    lo = float(np.percentile(arr, 100 * alpha / 2))
+    hi = float(np.percentile(arr, 100 * (1 - alpha / 2)))
     return lo, hi
 
 
-# ---------------------------------------------------------------------------
-# 통합 benchmark 평가
-# ---------------------------------------------------------------------------
+# ============================================================
+# 5. Main public API
+# ============================================================
 
 def evaluate_benchmark(
-    y_true,
-    y_score,
-    model_name: str,
-    setting: str,
+    y_true: Any,
+    y_score: Any,
+    *,
+    model_name: str = "",
+    setting: str = "",
     threshold: float = 0.5,
-    k_list: List[int] = (10, 20, 50),
-    bootstrap: bool = True,
-    n_bootstrap: int = 500,
-    bootstrap_seed: int = 42,
+    k_list: List[int] | None = None,
+    bootstrap: bool = False,
+    n_boot: int = 200,
+    bootstrap_alpha: float = 0.05,
+    missing_score: float = 0.0,
+    drop_missing: bool = False,
 ) -> BenchmarkResult:
     """
-    단일 모델의 예측 결과를 받아 BenchmarkResult를 반환.
+    평가 메인 함수.
 
-    Parameters
-    ----------
-    y_true  : shape (N,), {0, 1}
-    y_score : shape (N,), [0, 1] 확률 (또는 anomaly score)
+    지원 입력 형태:
+        A) y_true=list/array, y_score=list/array
+        B) y_true=dict{contract_id->label}, y_score=dict{contract_id->score}
+
+    Args:
+        y_true         : 정답 레이블 (0/1)
+        y_score        : 이상 탐지 점수 (높을수록 이상)
+        model_name     : 결과 식별용 이름
+        setting        : 실험 setting 이름 (예: "strict", "smoke")
+        threshold      : 고정 threshold 기반 metric 계산용
+        k_list         : P@K / R@K 계산할 K 목록 (None이면 [10, 20, 50])
+        bootstrap      : Bootstrap CI 계산 여부
+        n_boot         : Bootstrap 반복 횟수
+        bootstrap_alpha: 신뢰구간 유의수준
+        missing_score  : dict 입력 시 score 누락 계약에 채울 값
+        drop_missing   : True면 score 누락 계약 제거
+
+    Returns:
+        BenchmarkResult
     """
-    yt = _ensure_numpy(y_true).astype(np.float32)
-    ys = _ensure_numpy(y_score).astype(np.float32)
-    yp = (ys >= threshold).astype(np.int32)
+    if not _SKLEARN_AVAILABLE:
+        raise RuntimeError(
+            "[Benchmark] scikit-learn is required but not installed."
+        )
+
+    if k_list is None:
+        k_list = [10, 20, 50]
+
+    # ─── Align dict inputs ───────────────────────────────
+    if isinstance(y_true, Mapping) and isinstance(y_score, Mapping):
+        yt_list, ys_list = _align_dict_inputs(
+            y_true, y_score,
+            missing_score=missing_score,
+            drop_missing=drop_missing,
+        )
+        yt_raw = np.asarray(yt_list, dtype=np.int64)
+        ys_raw = np.asarray(ys_list, dtype=np.float64)
+    else:
+        yt_raw = _to_numpy_1d_int(y_true)
+        ys_raw = _to_numpy_1d_float(y_score)
+
+    # ─── NaN-safe sanitize ───────────────────────────────
+    yt, ys, dropped = _sanitize(yt_raw, ys_raw)
 
     n = len(yt)
-    fraud_rate = float(yt.mean()) if n > 0 else 0.0
+    num_pos = int((yt == 1).sum())
+    num_neg = int((yt == 0).sum())
 
-    # Threshold-based
-    tp, tn, fp, fn = compute_confusion(yt.astype(int), yp)
-    precision   = _safe_div(tp, tp + fp)
-    recall      = _safe_div(tp, tp + fn)
-    specificity = _safe_div(tn, tn + fp)
-    accuracy    = _safe_div(tp + tn, n)
-    f1          = _safe_div(2 * precision * recall, precision + recall)
+    if n == 0:
+        log.error(
+            "[Benchmark] No valid samples after sanitization. "
+            "Returning empty BenchmarkResult."
+        )
+        return BenchmarkResult(
+            model_name=model_name,
+            setting=setting,
+            num_dropped=dropped,
+        )
 
-    # Threshold-free
-    roc_auc = compute_roc_auc(yt, ys)
-    pr_auc  = compute_pr_auc(yt, ys)
+    log.info(
+        f"[Benchmark] Evaluating '{model_name}' / '{setting}': "
+        f"n={n}  pos={num_pos}  neg={num_neg}  dropped={dropped}"
+    )
 
-    # BCE
-    try:
-        ys_c = np.clip(ys, 1e-6, 1 - 1e-6).astype(np.float64)
-        yt_c = yt.astype(np.float64)
-        bce = float(-np.mean(
-            yt_c * np.log(ys_c) + (1 - yt_c) * np.log(1 - ys_c)
-        ))
-    except Exception:
-        bce = 0.0
+    # ─── Core metrics ────────────────────────────────────
+    roc_auc = _calc_roc_auc(yt, ys)
+    pr_auc = _calc_pr_auc(yt, ys)
+    best_f1, best_threshold = _calc_best_f1(yt, ys)
 
-    # Ranking metrics
-    ndcg_at_k = {k: compute_ndcg_at_k(yt, ys, k)      for k in k_list}
-    prec_at_k  = {k: compute_precision_at_k(yt, ys, k) for k in k_list}
-    rec_at_k   = {k: compute_recall_at_k(yt, ys, k)    for k in k_list}
+    # Fixed-threshold metrics
+    yp = _binarize(ys, threshold=threshold)
+    f1_at_05 = float(f1_score(yt, yp, zero_division=0))
+    precision_at_05 = float(precision_score(yt, yp, zero_division=0))
+    recall_at_05 = float(recall_score(yt, yp, zero_division=0))
+    accuracy_at_05 = float(accuracy_score(yt, yp))
 
-    # Bootstrap CI
-    roc_ci, pr_ci = None, None
-    if bootstrap and n >= 20:
-        roc_ci = bootstrap_ci(yt, ys, compute_roc_auc, n_bootstrap, seed=bootstrap_seed)
-        pr_ci  = bootstrap_ci(yt, ys, compute_pr_auc,  n_bootstrap, seed=bootstrap_seed)
+    # P@K / R@K
+    p_at_k: Dict[int, float] = {}
+    r_at_k: Dict[int, float] = {}
+    for k in k_list:
+        p_at_k[k] = _calc_p_at_k(yt, ys, k)
+        r_at_k[k] = _calc_r_at_k(yt, ys, k)
 
-    return BenchmarkResult(
+    # ─── Bootstrap CI ────────────────────────────────────
+    ci_roc_auc: Optional[Tuple[float, float]] = None
+    ci_pr_auc: Optional[Tuple[float, float]] = None
+
+    if bootstrap and num_pos > 1 and num_neg > 1:
+        log.info(f"[Benchmark] Running bootstrap (n_boot={n_boot})...")
+        ci_roc_auc = _bootstrap_ci(
+            yt, ys,
+            metric_fn=roc_auc_score,
+            n_boot=n_boot,
+            alpha=bootstrap_alpha,
+        )
+        ci_pr_auc = _bootstrap_ci(
+            yt, ys,
+            metric_fn=average_precision_score,
+            n_boot=n_boot,
+            alpha=bootstrap_alpha,
+        )
+    elif bootstrap:
+        log.warning(
+            "[Benchmark] Bootstrap skipped: insufficient class samples "
+            f"(pos={num_pos}, neg={num_neg})."
+        )
+
+    result = BenchmarkResult(
         model_name=model_name,
         setting=setting,
         roc_auc=roc_auc,
         pr_auc=pr_auc,
-        f1=f1,
-        precision=precision,
-        recall=recall,
-        specificity=specificity,
-        accuracy=accuracy,
-        bce_loss=bce,
-        tp=tp, tn=tn, fp=fp, fn=fn,
-        ndcg_at_k=ndcg_at_k,
-        precision_at_k=prec_at_k,
-        recall_at_k=rec_at_k,
-        roc_auc_ci=roc_ci,
-        pr_auc_ci=pr_ci,
-        n_samples=n,
-        fraud_rate=fraud_rate,
-        threshold=threshold,
+        best_f1=best_f1,
+        best_threshold=best_threshold,
+        f1_at_05=f1_at_05,
+        precision_at_05=precision_at_05,
+        recall_at_05=recall_at_05,
+        accuracy_at_05=accuracy_at_05,
+        p_at_k=p_at_k,
+        r_at_k=r_at_k,
+        num_samples=n,
+        num_pos=num_pos,
+        num_neg=num_neg,
+        num_dropped=dropped,
+        ci_roc_auc=ci_roc_auc,
+        ci_pr_auc=ci_pr_auc,
     )
 
+    log.info("\n" + result.pretty())
+    return result
 
-# ---------------------------------------------------------------------------
-# 결과 집계 및 출력
-# ---------------------------------------------------------------------------
 
-class BenchmarkTable:
+# ============================================================
+# 6. Dict alignment helper
+# ============================================================
+
+def _align_dict_inputs(
+    labels: Mapping[str, int],
+    scores: Mapping[str, float],
+    *,
+    missing_score: float = 0.0,
+    drop_missing: bool = False,
+) -> Tuple[List[int], List[float]]:
     """
-    여러 BenchmarkResult를 한 테이블로 정리.
-
-    Usage
-    -----
-    table = BenchmarkTable()
-    table.add(result_dominant)
-    table.add(result_level1)
-    print(table.to_markdown())
-    table.to_csv("results/benchmark.csv")
-    table.to_json("results/benchmark.json")
+    contract_id 기준으로 label/score 정렬.
     """
+    yt_list: List[int] = []
+    ys_list: List[float] = []
+    missing = 0
 
-    def __init__(self) -> None:
-        self.results: List[BenchmarkResult] = []
+    for cid, label in labels.items():
+        if cid in scores:
+            ys_list.append(float(scores[cid]))
+        else:
+            if drop_missing:
+                missing += 1
+                continue
+            ys_list.append(float(missing_score))
+            missing += 1
+        yt_list.append(int(label))
 
-    def add(self, result: BenchmarkResult) -> "BenchmarkTable":
-        self.results.append(result)
-        return self
-
-    def to_markdown(self, k_list: List[int] = (10, 50)) -> str:
-        if not self.results:
-            return "(empty)"
-
-        header = (
-            "| Model | Setting | ROC-AUC | PR-AUC | F1 | Prec | Rec "
-            "| Acc | N | FraudRate |"
+    if missing > 0:
+        mode = "dropped" if drop_missing else f"filled={missing_score}"
+        log.warning(
+            f"[Benchmark] {missing} contracts missing score: {mode}"
         )
-        sep = "|" + "|".join(["---"] * 9) + "|"
-        rows = [header, sep]
 
-        for r in self.results:
-            row = (
-                f"| {r.model_name} "
-                f"| {r.setting} "
-                f"| {r.roc_auc:.4f} "
-                f"| {r.pr_auc:.4f} "
-                f"| {r.f1:.4f} "
-                f"| {r.precision:.4f} "
-                f"| {r.recall:.4f} "
-                f"| {r.accuracy:.4f} "
-                f"| {r.n_samples} "
-                f"| {r.fraud_rate:.2%} |"
-            )
-            rows.append(row)
+    return yt_list, ys_list
 
-        return "\n".join(rows)
 
-    def to_csv(self, path: str) -> None:
-        import csv
-        from pathlib import Path
+# ============================================================
+# 7. Public exports
+# ============================================================
 
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        rows = [r.to_dict() for r in self.results]
-        if not rows:
-            return
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(rows)
-        log.info(f"[BenchmarkTable] Saved CSV → {path}")
-
-    def to_json(self, path: str) -> None:
-        import json
-        from pathlib import Path
-
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump([r.to_dict() for r in self.results], f, indent=2)
-        log.info(f"[BenchmarkTable] Saved JSON → {path}")
-
-    def best(self, metric: str = "pr_auc") -> Optional[BenchmarkResult]:
-        if not self.results:
-            return None
-        return max(self.results, key=lambda r: getattr(r, metric, 0.0))
-
-    def print_all(self) -> None:
-        print("\n" + "=" * 60)
-        print("  BENCHMARK RESULTS")
-        print("=" * 60)
-        for r in self.results:
-            print(r)
-            print("-" * 60)
-        best = self.best("pr_auc")
-        if best:
-            print(f"\n★ Best PR-AUC: [{best.model_name}] = {best.pr_auc:.4f}")
-        print("=" * 60 + "\n")
+__all__ = [
+    "BenchmarkResult",
+    "BenchmarkTable",
+    "evaluate_benchmark",
+]

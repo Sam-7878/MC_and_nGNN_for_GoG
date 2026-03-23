@@ -6,12 +6,60 @@ import torch.nn.functional as F
 from torch import nn
 from torch_geometric.nn import GINConv, global_max_pool, global_mean_pool
 
+from dataclasses import asdict, fields, is_dataclass
+from types import SimpleNamespace
+from typing import Any, Mapping
+import inspect
+
 from gog_fraud.common.types import Level1Output
+
+
+def _cfg_to_plain_dict(cfg: Any) -> dict:
+    if cfg is None:
+        return {}
+
+    if isinstance(cfg, dict):
+        return dict(cfg)
+
+    if is_dataclass(cfg):
+        return asdict(cfg)
+
+    if hasattr(cfg, "items"):
+        try:
+            return dict(cfg.items())
+        except Exception:
+            pass
+
+    if hasattr(cfg, "__dict__"):
+        return {
+            k: v
+            for k, v in vars(cfg).items()
+            if not k.startswith("_")
+        }
+
+    raise TypeError(f"Unsupported config type: {type(cfg)}")
+
+
+def _filter_kwargs_for_cls_init(cls, data: dict) -> dict:
+    try:
+        sig = inspect.signature(cls.__init__)
+        params = sig.parameters
+        accepts_var_kw = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD
+            for p in params.values()
+        )
+        if accepts_var_kw:
+            return dict(data)
+
+        allowed = set(params.keys()) - {"self"}
+        return {k: v for k, v in data.items() if k in allowed}
+    except Exception:
+        return dict(data)
 
 
 @dataclass
 class Level1ModelConfig:
-    in_dim: int
+    in_dim: int = 16
     hidden_dim: int = 128
     num_layers: int = 3
     dropout: float = 0.2
@@ -19,6 +67,25 @@ class Level1ModelConfig:
     struct_dim: int = 0
     struct_hidden_dim: int = 64
     out_dim: int = 1
+
+    @classmethod
+    def from_config(cls, cfg: Any) -> "Level1ModelConfig":
+        if isinstance(cfg, cls):
+            return cfg
+
+        data = _cfg_to_plain_dict(cfg)
+
+        # 흔한 alias 보정
+        if "hidden_dim" in data and "hid_dim" not in data:
+            data["hid_dim"] = data["hidden_dim"]
+        if "num_layer" in data and "num_layers" not in data:
+            data["num_layers"] = data["num_layer"]
+        if "lr" in data and "learning_rate" not in data:
+            data["learning_rate"] = data["lr"]
+
+        valid = {f.name for f in fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in valid}
+        return cls(**filtered)
 
 
 class MLPBlock(nn.Module):
@@ -221,3 +288,55 @@ class Level1Model(nn.Module):
             },
         )
 
+    @classmethod
+    def from_config(cls, cfg: Any) -> "Level1Model":
+        cfg_obj = Level1ModelConfig.from_config(cfg)
+
+        # 1순위: 생성자가 config 객체 자체를 받는 경우
+        try:
+            return cls(cfg_obj)
+        except TypeError:
+            pass
+
+        # 2순위: 생성자가 kwargs를 받는 경우
+        data = asdict(cfg_obj)
+        kwargs = _filter_kwargs_for_cls_init(cls, data)
+
+        try:
+            return cls(**kwargs)
+        except TypeError as e:
+            raise TypeError(
+                f"{cls.__name__}.from_config() failed. "
+                f"Config keys={list(data.keys())}, filtered={list(kwargs.keys())}, error={e}"
+            ) from e
+
+    @torch.no_grad()
+    def predict(self, graph):
+        self.eval()
+        out = self(graph)
+
+        # 여러 반환 형식 호환
+        if hasattr(out, "score"):
+            score = out.score
+        elif isinstance(out, dict):
+            score = (
+                out.get("score", None)
+                or out.get("anomaly_score", None)
+                or out.get("logit", None)
+                or out.get("logits", None)
+            )
+            if score is None:
+                raise KeyError("predict/forward output has no score-like key")
+        else:
+            score = out
+
+        if not torch.is_tensor(score):
+            score = torch.tensor(float(score), dtype=torch.float32)
+
+        score = score.reshape(-1)
+        if score.numel() == 0:
+            score = torch.tensor([0.0], dtype=torch.float32)
+        elif score.numel() > 1:
+            score = score.mean().reshape(1)
+
+        return SimpleNamespace(score=score.squeeze())
