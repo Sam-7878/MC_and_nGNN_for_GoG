@@ -600,16 +600,20 @@ class Level1TrainerConfig:
 
 
 class Level1Trainer:
-    def __init__(self, model, optimizer, cfg):
+    def __init__(self, model, optimizer, cfg, device=None):
         self.model = model
         self.optimizer = optimizer
         self.cfg = _cfg_norm(cfg)
 
-        self.device = str(_cfg_get(self.cfg, "device", "cuda" if torch.cuda.is_available() else "cpu"))
+        if device is not None:
+            self.device = device
+        else:
+            self.device = str(_cfg_get(self.cfg, "device", "cuda" if torch.cuda.is_available() else "cpu"))
+            
         self.model = self.model.to(self.device)
-
         self.use_amp = bool(_cfg_get(self.cfg, "use_amp", False) and self.device.startswith("cuda"))
         self.scaler = GradScaler("cuda", enabled=self.use_amp)
+
 
         pos_weight_value = _cfg_get(cfg, "pos_weight", None)
         self.pos_weight = None
