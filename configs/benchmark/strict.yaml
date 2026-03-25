@@ -54,10 +54,14 @@ legacy:
 
 # ── Revision Level1 설정 ────────────────────────────────
 level1:
-  hidden_dim  : 16
-  num_layers  : 2
-  dropout     : 0.1
-  lr          : 0.001
-  epochs      : 50
-  batch_size  : 32
-  device      : "cpu"
+  input_dim     : 8
+  hidden_dim    : 16
+  num_layers    : 3
+  num_classes   : 2
+  dropout       : 0.1
+  conv_type     : sage
+  pooling       : mean
+  lr            : 0.001
+  epochs        : 50
+  batch_size    : 32
+  device        : "cpu"

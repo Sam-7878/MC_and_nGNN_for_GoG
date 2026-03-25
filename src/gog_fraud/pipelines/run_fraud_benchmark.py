@@ -57,6 +57,56 @@ def _get_dataset_attr(dataset, *names, default=None):
     return default
 
 
+def _cfg_get(cfg, key, default=None):
+    if cfg is None:
+        return default
+    if isinstance(cfg, dict):
+        return cfg.get(key, default)
+    return getattr(cfg, key, default)
+
+
+def _nested_get(cfg, *keys, default=None):
+    cur = cfg
+    for key in keys:
+        if cur is None:
+            return default
+        if isinstance(cur, dict):
+            cur = cur.get(key, None)
+        else:
+            cur = getattr(cur, key, None)
+    return default if cur is None else cur
+
+
+def _resolve_device(cfg):
+    device = (
+        _nested_get(cfg, "training", "device")
+        or _nested_get(cfg, "trainer", "device")
+        or _nested_get(cfg, "model", "device")
+        or _cfg_get(cfg, "device", "cpu")
+    )
+    return str(device)
+
+
+def _build_level1_model(cfg):
+    """
+    Level1 모델을 config 기반으로 생성한다.
+    우선 Level1GNN.from_config(cfg)를 사용하고,
+    필요시 device로 이동한다.
+    """
+    # model_cfg = (
+    #     _nested_get(cfg, "model", "level1")
+    #     or _nested_get(cfg, "level1")
+    #     or _nested_get(cfg, "model")
+    #     or cfg
+    # )
+
+    # # model = Level1GNN.from_config(cfg)
+    # model = Level1GNN.from_config(model_cfg)
+    # device = _resolve_device(cfg)
+    # return model.to(device)
+    return Level1GNN.from_config(cfg).to(_resolve_device(cfg))
+
+
 def _normalize_graph_splits(dataset):
     train_graphs = _get_dataset_attr(dataset, "train_graphs", "train", default=[])
     valid_graphs = _get_dataset_attr(dataset, "valid_graphs", "val_graphs", "valid", "val", default=None)
@@ -133,7 +183,7 @@ def _build_level1_trainer(cfg: dict) -> "Level1Trainer":
 
     l1_cfg = cfg.get("level1", {})
     model = Level1GNN(
-        in_dim=l1_cfg.get("in_dim", 64),
+        input_dim=l1_cfg.get("in_dim", 64),
         hidden_dim=l1_cfg.get("hidden_dim", 128),
         out_dim=l1_cfg.get("out_dim", 64),
         num_layers=l1_cfg.get("num_layers", 3),
@@ -141,6 +191,8 @@ def _build_level1_trainer(cfg: dict) -> "Level1Trainer":
     )
     return Level1Trainer(
         model=model,
+        cfg=_nested_get(cfg, "training", "level1") or _nested_get(cfg, "trainer", "level1") or cfg,
+        optimizer=_build_optimizer(model, l1_cfg),
         device=cfg.get("device", "cuda"),
         epochs=l1_cfg.get("epochs", 50),
         lr=l1_cfg.get("lr", 1e-3),
@@ -181,27 +233,49 @@ def _build_level2_trainer(cfg: dict) -> "Level2Trainer":
 # - _call_level1_trainer_fit 올바르게 호출
 # ============================================================
 def run_revision_l1(dataset, cfg, table, setting):
-    log.info("[Revision L1] Training Level1 model …")
+    # log.info("[Revision L1] Training Level1 model …")
 
-    train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
-    log.info(
-        f"[Revision L1] split sizes: "
-        f"train={len(train_graphs)}, valid={len(valid_graphs)}, test={len(test_graphs)}"
+    # train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
+    # log.info(
+    #     f"[Revision L1] split sizes: "
+    #     f"train={len(train_graphs)}, valid={len(valid_graphs)}, test={len(test_graphs)}"
+    # )
+
+    # trainer = _build_level1_trainer(cfg)
+
+    # try:
+    #     fit_out = _call_level1_trainer_fit(
+    #         trainer=trainer,
+    #         train_graphs=train_graphs,
+    #         valid_graphs=valid_graphs,
+    #         label_dict=dataset.labels,  # ✅ dict 타입 확인
+    #         cfg=cfg,
+    #     )
+    # except Exception as e:
+    #     log.error(f"[Revision L1] fit failed: {e}", exc_info=True)
+    #     raise
+
+    log.info("[Revision L1+L2] Training Level1 + Level2 ...")
+
+    train_graphs = getattr(dataset, "train_graphs", []) or []
+    valid_graphs = getattr(dataset, "valid_graphs", []) or []
+
+    l1_model = _build_level1_model(cfg)
+
+    l1_trainer = Level1Trainer(
+        model=l1_model,
+        cfg=_nested_get(cfg, "training", "level1") or _nested_get(cfg, "trainer", "level1") or cfg,
+        optimizer=_build_optimizer(model, l1_cfg),
     )
 
-    trainer = _build_level1_trainer(cfg)
+    _call_level1_trainer_fit(
+        l1_trainer,
+        train_graphs=train_graphs,
+        valid_graphs=valid_graphs,
+        label_dict=getattr(dataset, "labels", None),
+    )
 
-    try:
-        fit_out = _call_level1_trainer_fit(
-            trainer=trainer,
-            train_graphs=train_graphs,
-            valid_graphs=valid_graphs,
-            label_dict=dataset.labels,  # ✅ dict 타입 확인
-            cfg=cfg,
-        )
-    except Exception as e:
-        log.error(f"[Revision L1] fit failed: {e}", exc_info=True)
-        raise
+    # 이후 Level2 로직 계속
 
     # 평가
     scores = trainer.evaluate(test_graphs, label_dict=dataset.labels)
@@ -215,23 +289,42 @@ def run_revision_l1(dataset, cfg, table, setting):
 # - fallback 직접 호출 제거 (동일 에러 반복 방지)
 # ============================================================
 def run_revision_l1_l2(dataset, cfg, table, setting):
-    log.info("[Revision L1+L2] Training Level1 + Level2 …")
+    # log.info("[Revision L1+L2] Training Level1 + Level2 …")
 
-    train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
+    # train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
 
-    # Level1 Trainer
-    l1_trainer = _build_level1_trainer(cfg)
-    try:
-        l1_fit_out = _call_level1_trainer_fit(
-            trainer=l1_trainer,
-            train_graphs=train_graphs,
-            valid_graphs=valid_graphs,
-            label_dict=dataset.labels,  # ✅ keyword 하나만
-            cfg=cfg,
-        )
-    except Exception as e:
-        log.error(f"[Revision L1+L2] Level1 fit failed: {e}", exc_info=True)
-        raise  # ✅ fallback 직접 호출 제거 → 동일 에러 반복 방지
+    # # Level1 Trainer
+    # l1_trainer = _build_level1_trainer(cfg)
+    # try:
+    #     l1_fit_out = _call_level1_trainer_fit(
+    #         trainer=l1_trainer,
+    #         train_graphs=train_graphs,
+    #         valid_graphs=valid_graphs,
+    #         label_dict=dataset.labels,  # ✅ keyword 하나만
+    #         cfg=cfg,
+    #     )
+    # except Exception as e:
+    #     log.error(f"[Revision L1+L2] Level1 fit failed: {e}", exc_info=True)
+    #     raise  # ✅ fallback 직접 호출 제거 → 동일 에러 반복 방지
+    log.info("[Revision L1+L2] Training Level1 + Level2 ...")
+ 
+    train_graphs = getattr(dataset, "train_graphs", []) or []
+    valid_graphs = getattr(dataset, "valid_graphs", []) or []
+ 
+    l1_model = _build_level1_model(cfg)
+ 
+    l1_trainer = Level1Trainer(
+        model=l1_model,
+        cfg=_nested_get(cfg, "training", "level1") or _nested_get(cfg, "trainer", "level1") or cfg,
+        optimizer=_build_optimizer(l1_model, cfg),
+    )
+ 
+    _call_level1_trainer_fit(
+        l1_trainer,
+        train_graphs=train_graphs,
+        valid_graphs=valid_graphs,
+        label_dict=getattr(dataset, "labels", None),
+    )
 
     # Level2 Trainer
     l2_trainer = _build_level2_trainer(cfg)
@@ -253,23 +346,42 @@ def run_revision_l1_l2(dataset, cfg, table, setting):
 # - 동일하게 _call_level1_trainer_fit keyword 통일
 # ============================================================
 def run_revision_full(dataset, cfg, table, setting):
-    log.info("[Revision Full] Training Level1 + Level2 + Fusion …")
+    # log.info("[Revision Full] Training Level1 + Level2 + Fusion …")
 
-    train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
-    log.info(
-        f"[Revision Full] split sizes: "
-        f"train={len(train_graphs)}, valid={len(valid_graphs)}, "
-        f"test={len(test_graphs)}, has_global_graph={dataset.global_graph is not None}"
+    # train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
+    # log.info(
+    #     f"[Revision Full] split sizes: "
+    #     f"train={len(train_graphs)}, valid={len(valid_graphs)}, "
+    #     f"test={len(test_graphs)}, has_global_graph={dataset.global_graph is not None}"
+    # )
+
+    # # Level1
+    # l1_trainer = _build_level1_trainer(cfg)
+    # l1_fit_out = _call_level1_trainer_fit(
+    #     trainer=l1_trainer,
+    #     train_graphs=train_graphs,
+    #     valid_graphs=valid_graphs,
+    #     label_dict=dataset.labels,  # ✅ keyword 하나만
+    #     cfg=cfg,
+    # )
+    log.info("[Revision Full] Training Level1 + Level2 + Fusion ...")
+ 
+    train_graphs = getattr(dataset, "train_graphs", []) or []
+    valid_graphs = getattr(dataset, "valid_graphs", []) or []
+ 
+    l1_model = _build_level1_model(cfg)
+ 
+    l1_trainer = Level1Trainer(
+        model=l1_model,
+        cfg=_nested_get(cfg, "training", "level1") or _nested_get(cfg, "trainer", "level1") or cfg,
+        optimizer=_build_optimizer(l1_model, cfg),
     )
-
-    # Level1
-    l1_trainer = _build_level1_trainer(cfg)
-    l1_fit_out = _call_level1_trainer_fit(
-        trainer=l1_trainer,
+ 
+    _call_level1_trainer_fit(
+        l1_trainer,
         train_graphs=train_graphs,
         valid_graphs=valid_graphs,
-        label_dict=dataset.labels,  # ✅ keyword 하나만
-        cfg=cfg,
+        label_dict=getattr(dataset, "labels", None),
     )
 
     # Level2 + Fusion
@@ -679,11 +791,6 @@ def _to_level1_loader(graphs, batch_size, shuffle):
     return PyGDataLoader(data_list, batch_size=batch_size, shuffle=shuffle)
 
  
-def _prepare_level1_loader(train_graphs, valid_graphs): # Ensure you have the right signature
-    # Modify if you don't need to pass `split` argument anymore
-    # Implement the loading logic
-    pass
-
 # ============================================================
 # [FIX 2] run_revision_l1 (line ~540~560)
 # - smoke 모드 split size 로그 추가

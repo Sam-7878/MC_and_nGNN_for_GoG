@@ -183,6 +183,7 @@ def _prepare_level1_loader(graphs, label_dict, batch_size, split='train', shuffl
     TypeError   if no path succeeds.
     ValueError  if the resolved data list is empty.
     """
+    _batch_size = batch_size
 
     # ── 1. Already a loader ────────────────────────────────────────────────
     if _is_dataloader(data_or_loader):
@@ -199,7 +200,7 @@ def _prepare_level1_loader(graphs, label_dict, batch_size, split='train', shuffl
             builder=loader_builder,
             items=data_or_loader,
             split_name=split_name,
-            batch_size=batch_size,
+            batch_size=_batch_size,
             shuffle=shuffle,
             num_workers=num_workers,
         )
@@ -266,7 +267,7 @@ def _prepare_level1_loader(graphs, label_dict, batch_size, split='train', shuffl
 
     loader = PyGDataLoader(
         valid_list,
-        batch_size=batch_size,
+        batch_size=_batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
     )
@@ -276,7 +277,7 @@ def _prepare_level1_loader(graphs, label_dict, batch_size, split='train', shuffl
         "from %d items (batch_size=%d, shuffle=%s).",
         split_name,
         len(valid_list),
-        batch_size,
+        _batch_size,
         shuffle,
     )
     return loader
@@ -529,10 +530,12 @@ def _prepare_level1_loader(
     *,
     split_name: str,
     loader_builder=None,
-    batch_size: int = 1,
+    batch_size: int = 16,
     shuffle: bool = False,
     num_workers: int = 0,
 ):
+    _batch_size = batch_size
+
     # 1) already a loader
     if _is_loader(data_or_loader):
         return data_or_loader
@@ -543,13 +546,13 @@ def _prepare_level1_loader(
             lambda: loader_builder(
                 data_or_loader,
                 split=split_name,
-                batch_size=batch_size,
+                batch_size=_batch_size,
                 shuffle=shuffle,
                 num_workers=num_workers,
             ),
             lambda: loader_builder(
                 data_or_loader,
-                batch_size=batch_size,
+                batch_size=_batch_size,
                 shuffle=shuffle,
                 num_workers=num_workers,
             ),
@@ -571,7 +574,7 @@ def _prepare_level1_loader(
     # 3) automatic fallback: list of TransactionGraph or Data
     auto_loader = _make_pyg_loader(
         data_or_loader,
-        batch_size=batch_size,
+        batch_size=_batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
     )
@@ -600,10 +603,14 @@ class Level1TrainerConfig:
 
 
 class Level1Trainer:
-    def __init__(self, model, optimizer, cfg, device=None):
+    def __init__(self, model, optimizer, cfg, epochs = 50, batch_size = 16, lr = 1e-3, weight_decay=1e-5, device=None):
         self.model = model
         self.optimizer = optimizer
         self.cfg = _cfg_norm(cfg)
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.lr = lr
+        self.weight_decay = weight_decay
 
         if device is not None:
             self.device = device
@@ -739,6 +746,7 @@ class Level1Trainer:
         train_loader=None,
         valid_loader=None,
         loader_builder=None,
+        batch_size=32,
         **kwargs,
     ):
         train_source = train_loader
