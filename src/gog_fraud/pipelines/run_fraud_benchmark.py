@@ -169,7 +169,6 @@ def _call_level1_trainer_fit(
         epochs=l1_cfg.get("epochs", 50),
         lr=l1_cfg.get("lr", 1e-3),
         batch_size=l1_cfg.get("batch_size", 32),
-        # ✅ split= 제거 → _prepare_level1_loader 시그니처와 일치
     )
 
 
@@ -183,9 +182,9 @@ def _build_level1_trainer(cfg: dict) -> "Level1Trainer":
 
     l1_cfg = cfg.get("level1", {})
     model = Level1GNN(
-        input_dim=l1_cfg.get("in_dim", 64),
+        in_dim=l1_cfg.get("in_dim", 16),
         hidden_dim=l1_cfg.get("hidden_dim", 128),
-        out_dim=l1_cfg.get("out_dim", 64),
+        out_dim=l1_cfg.get("out_dim", 16),
         num_layers=l1_cfg.get("num_layers", 3),
         dropout=l1_cfg.get("dropout", 0.2),
     )
@@ -212,7 +211,7 @@ def _build_level2_trainer(cfg: dict) -> "Level2Trainer":
 
     l2_cfg = cfg.get("level2", {})
     model = Level2GNN(
-        in_dim=l2_cfg.get("in_dim", 64),      # 보통 Level1 out_dim 과 동일
+        in_dim=l2_cfg.get("in_dim", 16),      # 보통 Level1 out_dim 과 동일
         hidden_dim=l2_cfg.get("hidden_dim", 128),
         out_dim=l2_cfg.get("out_dim", 2),      # 이진 분류 가정
         num_layers=l2_cfg.get("num_layers", 3),
@@ -704,21 +703,18 @@ def run_legacy_baselines(
     setting: str,
 ) -> None:
     legacy_cfg = _cfg_get(cfg, "legacy", {}) or {}
-    model_names = _cfg_get(
-        legacy_cfg,
-        "models",
-        ["DOMINANT", "DONE", "GAE", "AnomalyDAE", "CoLA"],
-    )
+    model_names = _cfg_get(legacy_cfg, "models", ["DOMINANT", "DONE", "GAE", "AnomalyDAE", "CoLA"],)
+    model_type = model_names[0] if model_names else "DOMINANT" # 기본값 설정, 기존 legacy에서는 model_names가 아니라 model_type이었음
 
-    base_adapter_cfg = LegacyAdapterConfig(
-        agg_method=_cfg_get(legacy_cfg, "agg_method", "max"),
-        topk=int(_cfg_get(legacy_cfg, "topk", 3)),
-        normalize_score=bool(_cfg_get(legacy_cfg, "normalize_score", True)),
-        gpu=int(_cfg_get(legacy_cfg, "gpu", -1)),
-        hid_dim=int(_cfg_get(legacy_cfg, "hid_dim", 64)),
-        num_layers=int(_cfg_get(legacy_cfg, "num_layers", 2)),
-        epoch=int(_cfg_get(legacy_cfg, "epoch", 100)),
-        lr=float(_cfg_get(legacy_cfg, "lr", 0.003)),
+    base_adapter_cfg    = LegacyAdapterConfig(
+        agg_method      = _cfg_get(legacy_cfg, "agg_method", "max"),
+        topk            = int(_cfg_get(legacy_cfg, "topk", 3)),
+        normalize_score = bool(_cfg_get(legacy_cfg, "normalize_score", True)),
+        gpu             = int(_cfg_get(legacy_cfg, "gpu", 0)),
+        hid_dim         = int(_cfg_get(legacy_cfg, "hid_dim", 16)),
+        num_layers      = int(_cfg_get(legacy_cfg, "num_layers", 2)),
+        epoch           = int(_cfg_get(legacy_cfg, "epoch", 100)),
+        lr              = float(_cfg_get(legacy_cfg, "lr", 0.003)),
     )
 
     # ==================================================
@@ -734,8 +730,8 @@ def run_legacy_baselines(
     # 각 split에 _maybe_limit_graphs 적용 (기존 로직 유지)
     train_graphs = _maybe_limit_graphs(train_graphs, cfg, "train")
     valid_graphs = _maybe_limit_graphs(valid_graphs, cfg, "val")  # "valid" 대신 "val" 사용 (기존 코드와 일치)
-    test_graphs = _maybe_limit_graphs(test_graphs, cfg, "test")
-
+    test_graphs  = _maybe_limit_graphs(test_graphs, cfg, "test")
+    log.info('finished loading and maybe limiting graphs for legacy baselines')
 
     if not test_graphs:
         log.warning("[Legacy] No test graphs found!")
@@ -743,21 +739,29 @@ def run_legacy_baselines(
     
     try:
         batch = LegacyBatchRunner(
-            # model_names=model_names,
-            # base_cfg=base_adapter_cfg,
-            detector_overrides=base_adapter_cfg.detector_overrides,
-            score_reduce=base_adapter_cfg.score_reduce,
-            progress_every=base_adapter_cfg.progress_every)
+            config=             base_adapter_cfg,
+            detector_overrides= base_adapter_cfg.detector_overrides,
+            score_reduce=       base_adapter_cfg.score_reduce,
+            progress_every=     base_adapter_cfg.progress_every)
         
+        log.info('***before batch.run_all for legacy baselines, test_graphs count: %d', len(test_graphs))
         all_scores = batch.run_all(test_graphs)
+
+        log.info('***before checking all_scores for legacy baselines, all_scores type: %s and value: %s', type(all_scores).__name__, all_scores)
+
+        if (all_scores is None) or (all_scores == {}) or (not isinstance(all_scores, dict)):
+            log.warning(f"[Legacy] ---- No scores returned from batch runner!")
+            return
+        
+        log.info(f"[Legacy] Models run: {list(all_scores.keys())}")
 
         for model_name, score_dict in all_scores.items():
             contract_ids = [g.contract_id for g in test_graphs]
-            filtered = [
-                (float(score_dict.get(cid, 0.0)), int(dataset.labels[cid]))
-                for cid in contract_ids
-                if cid in dataset.labels
-            ]
+            log.info(f"Processing model: {model_name}, score_dict keys: {list(score_dict.keys())[:3]}..., contract_ids: {contract_ids[:3]}...")
+
+            filtered = [(float(score_dict.get(cid, 0.0)), int(dataset.labels[cid])) for cid in contract_ids if cid in dataset.labels] 
+            log.info(f"Filtered scores for model {model_name}: {filtered[:3]}... (total {len(filtered)})")
+
             if not filtered:
                 log.warning(f"[Legacy:{model_name}] No valid scores found.")
                 continue
@@ -765,6 +769,7 @@ def run_legacy_baselines(
             ys_arr = [x[0] for x in filtered]
             yt_arr = [x[1] for x in filtered]
 
+            log.info('***before evaluate_benchmark for model_name: %s', model_name)
             result = evaluate_benchmark(
                 y_true=yt_arr,
                 y_score=ys_arr,
@@ -1019,20 +1024,43 @@ def main():
     log.info(f"[Benchmark] Setting: {setting}")
     log.info(f"[Benchmark] Output: {output_dir}")
 
+
+
+
+
     dataset_cfg = _cfg_get(cfg, "dataset", {}) or {}
-    # dataset = FraudDataset.from_config(dataset_cfg)
     dataset = _build_dataset_from_cfg(cfg)
+
+    # =====================================================================
+    # [추가된 코드] 데이터셋으로부터 실제 in_dim(피처 차원) 동적 추론 및 할당
+    # =====================================================================
+    in_dim = 32  # Fallback default
+    if hasattr(dataset, "train_graphs") and len(dataset.train_graphs) > 0:
+        first_item = dataset.train_graphs[0]
+        # 데이터가 TransactionGraph 객체로 감싸져 있는지, 순수 PyG Data인지 확인
+        data_obj = getattr(first_item, "graph", first_item) 
+        if hasattr(data_obj, "x") and data_obj.x is not None:
+            in_dim = data_obj.x.size(-1)  # 실제 차원 추출 (예: 3)
+            log.info(f"[Benchmark] Inferred dynamic in_dim: {in_dim} from dataset")
+
+    # 추론된 in_dim을 cfg(환경 설정)에 강제 덮어쓰기
+    if "level1" not in cfg:
+        cfg["level1"] = {}
+    cfg["level1"]["in_dim"] = in_dim
+    # =====================================================================
 
     table = BenchmarkTable()
 
     log.info("")
     log.info("=" * 50)
     log.info("(A) Running Legacy Baselines …")
+
     try:
         run_legacy_baselines(dataset, cfg, table, setting)
     except Exception:
         log.exception("[Benchmark] Legacy baselines failed")
 
+    # =====================================================================
     log.info("")
     log.info("=" * 50)
     log.info("(B) Running Revision Level1 …")
@@ -1042,6 +1070,7 @@ def main():
     except Exception as e:
         print(f"Error when running L1: {e}")
 
+    # =====================================================================
     log.info("")
     log.info("=" * 50)
     log.info("(C) Running Revision Level1 + Level2 …")

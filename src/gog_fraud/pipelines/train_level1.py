@@ -20,7 +20,7 @@ def load_graph_list(path: str):
     return graphs
 
 
-def infer_input_dim(graphs: List) -> int:
+def infer_in_dim(graphs: List) -> int:
     if len(graphs) == 0:
         raise ValueError("Cannot infer input dimension from empty graph list")
     if not hasattr(graphs[0], "x"):
@@ -96,7 +96,7 @@ def run_training(
 
     if model_cfg is None:
         model_cfg = Level1ModelConfig(
-            in_dim=infer_input_dim(train_graphs),
+            in_dim=infer_in_dim(train_graphs),
             hidden_dim=128,
             num_layers=3,
             dropout=0.2,
@@ -221,7 +221,7 @@ def main():
     valid_graphs = load_graph_list(args.valid_data)
 
     model_cfg = Level1ModelConfig(
-        in_dim=infer_input_dim(train_graphs),
+        in_dim=infer_in_dim(train_graphs),
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers,
         dropout=args.dropout,

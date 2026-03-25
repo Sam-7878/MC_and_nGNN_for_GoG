@@ -380,6 +380,7 @@ class LegacyBatchRunner:
     def run_all(self, test_graphs):
         # Your processing logic here; for example:
         scores = []
+        logger.info(f"[LegacyBatchRunner] Running run_all on {len(test_graphs)} graphs...")
         for graph in test_graphs:
             score = self.process_graph(graph)
             scores.append(score)

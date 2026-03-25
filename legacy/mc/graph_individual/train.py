@@ -35,9 +35,9 @@ class TransactionDataset(InMemoryDataset):
 class GoGMCModel(torch.nn.Module):
     """Graph of Graphs model with Monte Carlo Dropout"""
     
-    def __init__(self, input_dim, hidden_dim, num_classes, dropout=0.5):
+    def __init__(self, in_dim, hidden_dim, num_classes, dropout=0.5):
         super().__init__()
-        self.conv1 = GCNConv(input_dim, hidden_dim)
+        self.conv1 = GCNConv(in_dim, hidden_dim)
         self.conv2 = GCNConv(hidden_dim, hidden_dim)
         self.conv3 = GCNConv(hidden_dim, hidden_dim)
         
@@ -209,11 +209,11 @@ def main():
     # ---------------------------------------------------------
     # 동적 차원 할당 및 모델 초기화
     # ---------------------------------------------------------
-    input_dim = train_dataset.num_node_features
-    print(f"🧠 Detected node features dimension: {input_dim}")
+    in_dim = train_dataset.num_node_features
+    print(f"🧠 Detected node features dimension: {in_dim}")
 
     model = GoGMCModel(
-        input_dim=input_dim,
+        in_dim=in_dim,
         hidden_dim=args.hidden_dim,
         num_classes=args.n_classes,
         dropout=args.dropout
@@ -269,7 +269,7 @@ def main():
                 'model_state_dict': model.model_state_dict() if hasattr(model, 'module') else model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_f1': best_val_f1,
-                'input_dim': input_dim
+                'in_dim': in_dim
             }, model_save_path)
             print("  🌟 Best model saved!")
         else:

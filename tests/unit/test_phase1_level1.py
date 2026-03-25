@@ -24,7 +24,7 @@ def make_synthetic_graph(
     graph_id: int,
     label: int,
     num_nodes: int = 5,
-    in_dim: int = 8,
+    in_dim: int = 16,
     struct_dim: int = 4,
 ):
     x = torch.randn(num_nodes, in_dim)
@@ -50,7 +50,7 @@ def make_synthetic_graph(
     )
 
 
-def make_dataset(n_graphs: int = 12, in_dim: int = 8, struct_dim: int = 4):
+def make_dataset(n_graphs: int = 12, in_dim: int = 16, struct_dim: int = 4):
     graphs = []
     for i in range(n_graphs):
         label = i % 2
@@ -90,12 +90,12 @@ def test_types_contract():
 
 
 def test_level1_model_forward():
-    graphs = make_dataset(n_graphs=4, in_dim=8, struct_dim=4)
+    graphs = make_dataset(n_graphs=4, in_dim=16, struct_dim=4)
     loader = DataLoader(graphs, batch_size=2, shuffle=False)
     batch = next(iter(loader))
 
     cfg = Level1ModelConfig(
-        in_dim=8,
+        in_dim=16,
         hidden_dim=16,
         num_layers=2,
         dropout=0.1,
@@ -110,16 +110,16 @@ def test_level1_model_forward():
     assert out.logits.shape == (2, 1)
     assert out.score.shape == (2, 1)
     assert out.embedding.shape[0] == 2
-    assert out.embedding.shape[1] == model.output_dim
+    assert out.embedding.shape[1] == model.out_dim
     assert out.label.shape == (2, 1)
 
 
 def test_level1_trainer_train_and_eval():
-    graphs = make_dataset(n_graphs=10, in_dim=8, struct_dim=4)
+    graphs = make_dataset(n_graphs=10, in_dim=16, struct_dim=4)
     loader = DataLoader(graphs, batch_size=4, shuffle=True)
 
     model_cfg = Level1ModelConfig(
-        in_dim=8,
+        in_dim=16,
         hidden_dim=16,
         num_layers=2,
         dropout=0.1,
@@ -156,8 +156,8 @@ def test_level1_trainer_train_and_eval():
 
 
 def test_train_level1_pipeline_saves_checkpoints(tmp_path: Path):
-    train_graphs = make_dataset(n_graphs=12, in_dim=8, struct_dim=4)
-    valid_graphs = make_dataset(n_graphs=6, in_dim=8, struct_dim=4)
+    train_graphs = make_dataset(n_graphs=12, in_dim=16, struct_dim=4)
+    valid_graphs = make_dataset(n_graphs=6, in_dim=16, struct_dim=4)
 
     output_dir = tmp_path / "artifacts" / "level1"
     result = run_training(
@@ -165,7 +165,7 @@ def test_train_level1_pipeline_saves_checkpoints(tmp_path: Path):
         valid_graphs=valid_graphs,
         output_dir=str(output_dir),
         model_cfg=Level1ModelConfig(
-            in_dim=8,
+            in_dim=16,
             hidden_dim=16,
             num_layers=2,
             dropout=0.1,
@@ -193,8 +193,8 @@ def test_train_level1_pipeline_saves_checkpoints(tmp_path: Path):
 
 
 def test_export_level1_embeddings_creates_bundle(tmp_path: Path):
-    train_graphs = make_dataset(n_graphs=8, in_dim=8, struct_dim=4)
-    valid_graphs = make_dataset(n_graphs=4, in_dim=8, struct_dim=4)
+    train_graphs = make_dataset(n_graphs=8, in_dim=16, struct_dim=4)
+    valid_graphs = make_dataset(n_graphs=4, in_dim=16, struct_dim=4)
 
     train_data_path = tmp_path / "train_graphs.pt"
     valid_data_path = tmp_path / "valid_graphs.pt"
@@ -207,7 +207,7 @@ def test_export_level1_embeddings_creates_bundle(tmp_path: Path):
         valid_graphs=valid_graphs,
         output_dir=str(output_dir),
         model_cfg=Level1ModelConfig(
-            in_dim=8,
+            in_dim=16,
             hidden_dim=16,
             num_layers=2,
             dropout=0.1,

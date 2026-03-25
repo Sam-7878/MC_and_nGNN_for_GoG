@@ -118,7 +118,7 @@ def save_graph_list(path: str, graphs: Sequence) -> str:
     return str(path)
 
 
-def infer_input_dim(graphs: Sequence) -> int:
+def infer_in_dim(graphs: Sequence) -> int:
     if len(graphs) == 0:
         raise ValueError("Cannot infer input dimension from empty graph list")
     if not hasattr(graphs[0], "x") or graphs[0].x is None:
@@ -201,8 +201,8 @@ class Level1GraphDataset(Dataset):
     def to_pt(self, path: str) -> str:
         return save_graph_list(path, self.graphs)
 
-    def input_dim(self) -> int:
-        return infer_input_dim(self.graphs)
+    def in_dim(self) -> int:
+        return infer_in_dim(self.graphs)
 
     def struct_dim(self) -> int:
         return infer_struct_dim(self.graphs)

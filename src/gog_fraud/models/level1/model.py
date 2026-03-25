@@ -210,9 +210,9 @@ class Level1Model(nn.Module):
             )
             struct_out_dim = cfg.struct_hidden_dim
 
-        self.output_dim = readout_dim + struct_out_dim
+        self.out_dim = readout_dim + struct_out_dim
         self.head = Level1FraudHead(
-            in_dim=self.output_dim,
+            in_dim=self.out_dim,
             hidden_dim=cfg.hidden_dim,
             out_dim=cfg.out_dim,
         )
@@ -284,7 +284,7 @@ class Level1Model(nn.Module):
             label=label,
             aux={
                 "num_graphs": num_graphs,
-                "output_dim": self.output_dim,
+                "out_dim": self.out_dim,
             },
         )
 

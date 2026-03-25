@@ -386,7 +386,7 @@ def main():
     print(f"✅ Parallel upgrade completed!")
     print(f"{'='*60}\n")
     print(f"Next steps:")
-    print(f"1. Update train.py: change 'input_dim = 9' to 'input_dim = 24'")
+    print(f"1. Update train.py: change 'in_dim = 9' to 'in_dim = 24'")
     print(f"2. Run training: cd ../gog_model && python train.py --chain {args.chain}")
     print(f"3. Expected improvement: F1 score 11% → 30-40%")
 

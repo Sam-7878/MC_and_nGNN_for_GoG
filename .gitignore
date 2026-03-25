@@ -4,6 +4,7 @@ build/
 xbuild/
 _res/
 .venv/
+.pytest_cache/
 
 # Python bytecode
 **/__pycache__/

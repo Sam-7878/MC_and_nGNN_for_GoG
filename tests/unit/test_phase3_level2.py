@@ -257,7 +257,7 @@ def test_level2_model_forward():
     batch  = next(iter(loader))
 
     cfg = Level2ModelConfig(
-        in_dim=17,
+        in_dim=16,
         hidden_dim=16,
         num_layers=2,
         num_heads=4,
@@ -292,7 +292,7 @@ def test_level2_model_forward_no_edge_attr():
     batch  = next(iter(loader))
 
     cfg = Level2ModelConfig(
-        in_dim=17,
+        in_dim=16,
         hidden_dim=16,
         num_layers=1,
         num_heads=4,
@@ -316,7 +316,7 @@ def test_level2_trainer_train_and_eval():
     loader = DataLoader(graphs, batch_size=4, shuffle=True)
 
     cfg = Level2ModelConfig(
-        in_dim=17, hidden_dim=16, num_layers=1,
+        in_dim=16, hidden_dim=16, num_layers=1,
         num_heads=4, dropout=0.0, edge_dim=1,
         readout="meanmax", out_dim=1,
     )
@@ -355,7 +355,7 @@ def test_train_level2_pipeline_saves_checkpoints(tmp_path: Path):
         valid_graphs=valid_graphs,
         output_dir=str(output_dir),
         model_cfg=Level2ModelConfig(
-            in_dim=17, hidden_dim=16, num_layers=1,
+            in_dim=16, hidden_dim=16, num_layers=1,
             num_heads=4, dropout=0.0, edge_dim=1,
             readout="meanmax", out_dim=1,
         ),

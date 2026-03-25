@@ -352,7 +352,7 @@ class LearnedFusionNet(nn.Module):
     def __init__(self, cfg: LearnedFusionConfig):
         super().__init__()
         self.cfg    = cfg
-        self.in_dim = 7 if cfg.use_logits else 5
+        self.in_dim = 16 if cfg.use_logits else 8
 
         self.net = _build_mlp(
             in_dim=self.in_dim,

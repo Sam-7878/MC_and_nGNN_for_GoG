@@ -26,6 +26,11 @@ dataset:
   chunk_size: 100
   smoke_test: true
 
+# ── 평가 공통 ───────────────────────────────────────────
+threshold : 0.5
+k_list    : [10, 20, 50]
+bootstrap : true
+
 legacy:
   models: ["DOMINANT"]
   agg_method: "max"
@@ -35,7 +40,7 @@ legacy:
   gpu: -1
   hid_dim: 32
   num_layers: 2
-  epoch: 5
+  epoch: 10
   lr: 0.003
   weight_decay: 0.0
   dropout: 0.0

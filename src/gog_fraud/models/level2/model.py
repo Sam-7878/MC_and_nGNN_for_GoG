@@ -249,7 +249,7 @@ class Level2Model(nn.Module):
         if cfg.readout == "meanmax":
             readout_out_dim = cfg.hidden_dim * 2
 
-        self.output_dim = readout_out_dim
+        self.out_dim = readout_out_dim
         self.head = Level2FraudHead(
             in_dim=readout_out_dim,
             hidden_dim=cfg.hidden_dim,
@@ -302,7 +302,7 @@ class Level2Model(nn.Module):
             label=label,
             aux={
                 "num_graphs": num_graphs,
-                "output_dim": self.output_dim,
+                "out_dim": self.out_dim,
             },
         )
 

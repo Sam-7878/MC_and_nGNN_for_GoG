@@ -75,9 +75,8 @@ class Level1GNN(nn.Module):
 
     def __init__(
         self,
-        in_dim: int = 32,
-        out_dim: int = 32,
-        input_dim: Optional[int] = None,
+        in_dim: int = 16,
+        out_dim: int = 16,
         hidden_dim: int = 128,
         num_layers: int = 3,
         num_classes: int = 2,
@@ -94,7 +93,7 @@ class Level1GNN(nn.Module):
 
         self.in_dim = in_dim
         self.out_dim = out_dim
-        # self.input_dim = input_dim
+        # self.in_dim = in_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.num_classes = num_classes
@@ -142,8 +141,8 @@ class Level1GNN(nn.Module):
             or cfg
         )
 
-        input_dim = (
-            _cfg_get(level1_cfg, "input_dim", None)
+        in_dim = (
+            _cfg_get(level1_cfg, "in_dim", None)
             or _cfg_get(level1_cfg, "in_dim", None)
             or _cfg_get(level1_cfg, "num_node_features", None)
             or _cfg_get(level1_cfg, "node_feat_dim", None)
@@ -164,7 +163,7 @@ class Level1GNN(nn.Module):
         num_classes = (
             _cfg_get(level1_cfg, "num_classes", None)
             or _cfg_get(level1_cfg, "out_dim", None)
-            or _cfg_get(level1_cfg, "output_dim", None)
+            or _cfg_get(level1_cfg, "out_dim", None)
             or 2
         )
 
@@ -179,7 +178,7 @@ class Level1GNN(nn.Module):
         head_hidden_dim = _cfg_get(level1_cfg, "head_hidden_dim", None)
 
         return cls(
-            input_dim=input_dim,
+            in_dim=in_dim,
             hidden_dim=hidden_dim,
             num_layers=num_layers,
             num_classes=num_classes,

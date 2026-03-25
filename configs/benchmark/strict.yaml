@@ -54,7 +54,8 @@ legacy:
 
 # ── Revision Level1 설정 ────────────────────────────────
 level1:
-  input_dim     : 8
+  in_dim        : 16
+  out_dim       : 16
   hidden_dim    : 16
   num_layers    : 3
   num_classes   : 2

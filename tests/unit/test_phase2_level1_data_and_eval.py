@@ -9,7 +9,7 @@ from torch_geometric.loader import DataLoader
 from gog_fraud.data.level1.dataset import (
     Level1GraphDataset,
     get_graph_ids,
-    infer_input_dim,
+    infer_in_dim,
     infer_struct_dim,
     load_graph_list,
     save_graph_list,
@@ -33,7 +33,7 @@ def make_synthetic_graph(
     label: int,
     timestamp: int,
     num_nodes: int = 5,
-    in_dim: int = 8,
+    in_dim: int = 16,
     struct_dim: int = 4,
     with_graph_id: bool = True,
 ):
@@ -72,7 +72,7 @@ def make_synthetic_graph(
 
 def make_dataset(
     n_graphs: int = 12,
-    in_dim: int = 8,
+    in_dim: int = 16,
     struct_dim: int = 4,
     include_graph_id: bool = True,
 ):
@@ -103,7 +103,7 @@ def collect_struct_matrix(graphs):
 
 
 def test_level1_dataset_load_and_infer_dims(tmp_path: Path):
-    graphs = make_dataset(n_graphs=6, in_dim=8, struct_dim=4, include_graph_id=False)
+    graphs = make_dataset(n_graphs=6, in_dim=16, struct_dim=4, include_graph_id=False)
     data_path = tmp_path / "graphs.pt"
     save_graph_list(str(data_path), graphs)
 
@@ -116,7 +116,7 @@ def test_level1_dataset_load_and_infer_dims(tmp_path: Path):
     dataset = Level1GraphDataset(loaded)
 
     assert len(dataset) == 6
-    assert infer_input_dim(dataset.graphs) == 8
+    assert infer_in_dim(dataset.graphs) == 8
     assert infer_struct_dim(dataset.graphs) == 4
 
     graph_ids = get_graph_ids(dataset.graphs)
@@ -219,11 +219,11 @@ def test_fraud_metrics_basic():
 
 
 def test_level1_evaluator_loader_and_bundle():
-    graphs = make_dataset(n_graphs=8, in_dim=8, struct_dim=4, include_graph_id=True)
+    graphs = make_dataset(n_graphs=8, in_dim=16, struct_dim=4, include_graph_id=True)
     loader = DataLoader(graphs, batch_size=4, shuffle=False)
 
     model_cfg = Level1ModelConfig(
-        in_dim=8,
+        in_dim=16,
         hidden_dim=16,
         num_layers=2,
         dropout=0.1,
