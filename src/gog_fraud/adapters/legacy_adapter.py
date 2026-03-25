@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import torch
 from torch_geometric.data import Data
+from pygod import detector as pygod_detector
 
 logger = logging.getLogger(__name__)
 
@@ -260,8 +261,6 @@ def _resolve_detector_class(model_name: str):
     """
     Resolve detector class lazily from pygod.detector.
     """
-    from pygod import detector as pygod_detector
-
     alias = {
         "DOMINANT": "DOMINANT",
         "CONAD": "CONAD",
@@ -376,25 +375,145 @@ class LegacyBatchRunner:
         key = str(model_name).upper()
         return dict(self.detector_overrides.get(key, {}))
     
-    # Ensure the 'run_all' method exists
-    def run_all(self, test_graphs):
-        # Your processing logic here; for example:
-        scores = []
-        logger.info(f"[LegacyBatchRunner] Running run_all on {len(test_graphs)} graphs...")
-        for graph in test_graphs:
-            score = self.process_graph(graph)
-            scores.append(score)
-        return {graph.name: s for graph, s in zip(test_graphs, scores)}   # 반드시 dict 형태로 반환해야 합니다.
 
-    # def run_all(self, test_graphs):
-    #     scores = []
-    #     for g in test_graphs:
-    #         scores.append(self._predict(g))
-    #     return {g.name: s for g, s in zip(test_graphs, scores)}   # 반드시 dict 형태로 반환해야 합니다.
+    def run_all(self, model_name: str, test_graphs: List[Any]) -> Dict[str, float]:
+            import logging
+            try:
+                import pygod.detector as pygod_detector
+            except ImportError:
+                logging.getLogger(__name__).error("pygod library is not installed.")
+                return {}
+
+            logger = logging.getLogger(__name__)
+            scores = []
+            logger.info(f"[LegacyBatchRunner] Running run_all for {model_name} on {len(test_graphs)} graphs...")
+            
+            # 1. pygod.detector에서 해당 모델(예: DOMINANT) 클래스를 동적으로 가져옵니다.
+            model_cls = getattr(pygod_detector, model_name, None)
+            if model_cls is None:
+                logger.error(f"[LegacyBatchRunner] Unknown detector class: {model_name}")
+                # 빈 딕셔너리 반환 시 벤치마크 파이프라인에서 에러가 날 수 있으므로 임시 점수 생성
+                return {getattr(g, "name", f"graph_{i}"): 0.0 for i, g in enumerate(test_graphs)}
+
+            # 2. 모델 파라미터(kwargs) 설정
+            kwargs = {}
+            # (선택) 모듈 레벨에 정의된 _DEFAULT_DETECTOR_KWARGS가 있다면 가져오기
+            global_vars = globals()
+            if "_DEFAULT_DETECTOR_KWARGS" in global_vars:
+                kwargs.update(global_vars["_DEFAULT_DETECTOR_KWARGS"].get(model_name, {}))
+                
+            cfg = getattr(self, "config", getattr(self, "cfg", None))
+            if cfg and hasattr(cfg, "detector_overrides") and cfg.detector_overrides:
+                override = cfg.detector_overrides.get(model_name)
+                if override:
+                    kwargs.update(override)
+
+            # 3. 각 그래프 순회하며 모델 생성 및 예측 수행
+            for graph in test_graphs:
+                try:
+                    # PyGOD 모델 객체 생성 (비지도 모델이므로 매 그래프 평가 시마다 새 인스턴스가 안전함)
+                    model = model_cls(**kwargs)
+                except Exception as e:
+                    logger.error(f"Failed to initialize model {model_name}: {e}")
+                    model = None
+
+                # process_graph로 모델과 데이터를 넘겨 스코어 반환
+                score = self.process_graph(model, graph)
+                scores.append(score)
+                
+            # 4. dict 반환 (TransactionGraph 객체의 속성 활용)
+            result_dict = {}
+            for i, (graph, s) in enumerate(zip(test_graphs, scores)):
+                # graph.name 혹은 tx_hash 속성 등을 식별자로 사용 (없으면 기본값 할당)
+                graph_id = getattr(graph, "name", getattr(graph, "tx_hash", getattr(graph, "id", f"graph_{i}")))
+                result_dict[graph_id] = s
+                
+            return result_dict
+
     
-    def process_graph(self, graph):
-        # Process your graph and return a score
-        pass
+    def process_graph(self, model: Any, graph_item: Any) -> float:
+            import torch
+            import numpy as np
+            import logging
+            from torch_geometric.data import Data
+
+            logger = logging.getLogger(__name__)
+
+            # 1. 원본 데이터 추출
+            raw_data = getattr(graph_item, "graph", graph_item)
+            if raw_data is None or not hasattr(raw_data, "x") or raw_data.x is None:
+                return 0.0
+
+            try:
+                # =========================================================
+                # [핵심 수정] PyGOD 내부의 NeighborLoader가 딕셔너리 등을
+                # 슬라이싱(slice)하려다 에러가 나는 것을 원천 차단하기 위해,
+                # 필수 텐서만 포함된 순수 Data 객체로 재포장(Sanitize) 합니다.
+                # =========================================================
+                clean_data = Data(
+                    x=raw_data.x.float(),
+                    edge_index=raw_data.edge_index.long()
+                )
+                # 타겟 라벨 복사
+                if hasattr(raw_data, 'y') and raw_data.y is not None:
+                    clean_data.y = raw_data.y
+                
+                # PyGOD의 특정 모델들은 num_nodes 속성을 명시적으로 요구함
+                if hasattr(raw_data, 'num_nodes'):
+                    clean_data.num_nodes = raw_data.num_nodes
+                else:
+                    clean_data.num_nodes = raw_data.x.size(0)
+
+                # =========================================================
+
+                # 2. 모델 학습 (fit) 및 예측 (predict)
+                if model is not None and hasattr(model, "fit"):
+                    model.fit(clean_data)  # 정제된 clean_data 사용
+
+                if model is not None and hasattr(model, "decision_function"):
+                    node_scores = model.decision_function(clean_data)
+                elif model is not None and hasattr(model, "predict_proba"):
+                    probs = model.predict_proba(clean_data)
+                    node_scores = probs[:, 1] if probs.ndim > 1 else probs
+                elif model is not None and hasattr(model, "predict"):
+                    node_scores = model.predict(clean_data)
+                else:
+                    logger.warning("[LegacyBatchRunner] Valid model object not found or has no predict function.")
+                    return 0.0
+
+                # 3. Tensor -> Numpy 변환
+                if isinstance(node_scores, torch.Tensor):
+                    node_scores = node_scores.detach().cpu().numpy()
+                    
+                node_scores = np.array(node_scores, dtype=np.float32)
+                
+                if node_scores.size == 0:
+                    return 0.0
+
+                # 4. 노드별 스코어를 그래프 1개의 스코어로 축소 (Reduce)
+                cfg = getattr(self, "config", getattr(self, "cfg", None))
+                reduce_method = getattr(cfg, "score_reduce", "mean") if cfg else "mean"
+                
+                if reduce_method == "mean":
+                    graph_score = np.mean(node_scores)
+                elif reduce_method == "max":
+                    graph_score = np.max(node_scores)
+                elif reduce_method == "sum":
+                    graph_score = np.sum(node_scores)
+                elif reduce_method == "topk":
+                    k = getattr(cfg, "topk", 3) if cfg else 3
+                    k = min(int(k), len(node_scores))
+                    topk_scores = np.sort(node_scores)[-k:]
+                    graph_score = np.mean(topk_scores)
+                else:
+                    graph_score = np.mean(node_scores)
+
+                return float(graph_score)
+
+            except Exception as e:
+                # traceback을 포함하여 어떤 에러인지 더 명확하게 찍어줍니다.
+                logger.error(f"[LegacyBatchRunner] process_graph Error: {e}", exc_info=True)
+                return 0.0
 
     def run_detector(
         self,

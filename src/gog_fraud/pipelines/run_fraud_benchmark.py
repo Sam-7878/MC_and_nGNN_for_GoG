@@ -745,9 +745,10 @@ def run_legacy_baselines(
             progress_every=     base_adapter_cfg.progress_every)
         
         log.info('***before batch.run_all for legacy baselines, test_graphs count: %d', len(test_graphs))
-        all_scores = batch.run_all(test_graphs)
+        all_scores = batch.run_all(model_name = model_names[0], test_graphs=test_graphs)
 
-        log.info('***before checking all_scores for legacy baselines, all_scores type: %s and value: %s', type(all_scores).__name__, all_scores)
+        log.info('***before checking all_scores for legacy baselines, all_scores type: %s and value: %s', type(all_scores).__name__, 
+                 all_scores[0:3] if isinstance(all_scores, (list, dict)) else str(all_scores))
 
         if (all_scores is None) or (all_scores == {}) or (not isinstance(all_scores, dict)):
             log.warning(f"[Legacy] ---- No scores returned from batch runner!")
