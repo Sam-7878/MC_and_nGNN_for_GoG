@@ -25,6 +25,7 @@ dataset:
   load_global_graph: true
   chunk_size: 100
   smoke_test: true
+  normalize_features: true
 
 # ── 평가 공통 ───────────────────────────────────────────
 threshold : 0.5

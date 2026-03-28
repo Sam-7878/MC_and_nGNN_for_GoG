@@ -28,6 +28,7 @@ dataset:
   fraud_categories: null
  
   load_global_graph: false
+  normalize_features: true
   
 # ── 평가 공통 ───────────────────────────────────────────
 threshold : 0.5

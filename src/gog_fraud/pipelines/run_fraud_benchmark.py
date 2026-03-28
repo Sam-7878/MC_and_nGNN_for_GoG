@@ -243,180 +243,7 @@ def _build_level2_trainer(cfg: dict, l1_model=None) -> "Level2Trainer":
     )
 
 
-# ============================================================
-# [FIX 2] run_revision_l1 (line ~540~560)
-# - smoke 모드 split size 로그 추가
-# - _call_level1_trainer_fit 올바르게 호출
-# ============================================================
-def run_revision_l1(dataset, cfg, table, setting):
-    # log.info("[Revision L1] Training Level1 model …")
-
-    # train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
-    # log.info(
-    #     f"[Revision L1] split sizes: "
-    #     f"train={len(train_graphs)}, valid={len(valid_graphs)}, test={len(test_graphs)}"
-    # )
-
-    # trainer = _build_level1_trainer(cfg)
-
-    # try:
-    #     fit_out = _call_level1_trainer_fit(
-    #         trainer=trainer,
-    #         train_graphs=train_graphs,
-    #         valid_graphs=valid_graphs,
-    #         label_dict=dataset.labels,  # ✅ dict 타입 확인
-    #         cfg=cfg,
-    #     )
-    # except Exception as e:
-    #     log.error(f"[Revision L1] fit failed: {e}", exc_info=True)
-    #     raise
-
-    log.info("[Revision L1+L2] Training Level1 + Level2 ...")
-
-    train_graphs = getattr(dataset, "train_graphs", []) or []
-    valid_graphs = getattr(dataset, "valid_graphs", []) or []
-
-    l1_model = _build_level1_model(cfg)
-
-    l1_trainer = Level1Trainer(
-        model=l1_model,
-        cfg=_nested_get(cfg, "training", "level1") or _nested_get(cfg, "trainer", "level1") or cfg,
-        optimizer=_build_optimizer(model, l1_cfg),
-    )
-
-    _call_level1_trainer_fit(
-        l1_trainer,
-        train_graphs=train_graphs,
-        valid_graphs=valid_graphs,
-        label_dict=getattr(dataset, "labels", None),
-    )
-
-    # 이후 Level2 로직 계속
-
-    # 평가
-    scores = trainer.evaluate(test_graphs, label_dict=dataset.labels)
-    _record_scores(table, "Revision-L1", scores)
-    return scores
-
-
-# ============================================================
-# [FIX 3] run_revision_l1_l2 (line ~610~630)
-# - label_dict 중복 전달 제거
-# - fallback 직접 호출 제거 (동일 에러 반복 방지)
-# ============================================================
-def run_revision_l1_l2(dataset, cfg, table, setting):
-    # log.info("[Revision L1+L2] Training Level1 + Level2 …")
-
-    # train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
-
-    # # Level1 Trainer
-    # l1_trainer = _build_level1_trainer(cfg)
-    # try:
-    #     l1_fit_out = _call_level1_trainer_fit(
-    #         trainer=l1_trainer,
-    #         train_graphs=train_graphs,
-    #         valid_graphs=valid_graphs,
-    #         label_dict=dataset.labels,  # ✅ keyword 하나만
-    #         cfg=cfg,
-    #     )
-    # except Exception as e:
-    #     log.error(f"[Revision L1+L2] Level1 fit failed: {e}", exc_info=True)
-    #     raise  # ✅ fallback 직접 호출 제거 → 동일 에러 반복 방지
-    log.info("[Revision L1+L2] Training Level1 + Level2 ...")
- 
-    train_graphs = getattr(dataset, "train_graphs", []) or []
-    valid_graphs = getattr(dataset, "valid_graphs", []) or []
- 
-    l1_model = _build_level1_model(cfg)
- 
-    l1_trainer = Level1Trainer(
-        model=l1_model,
-        cfg=_nested_get(cfg, "training", "level1") or _nested_get(cfg, "trainer", "level1") or cfg,
-        optimizer=_build_optimizer(l1_model, cfg),
-    )
- 
-    _call_level1_trainer_fit(
-        l1_trainer,
-        train_graphs=train_graphs,
-        valid_graphs=valid_graphs,
-        label_dict=getattr(dataset, "labels", None),
-    )
-
-    # Level2 Trainer
-    l2_trainer = _build_level2_trainer(cfg)
-    node_embeddings = l1_fit_out.get("node_embeddings", None)
-    l2_fit_out = l2_trainer.fit(
-        train_graphs=train_graphs,
-        valid_graphs=valid_graphs,
-        label_dict=dataset.labels,
-        node_embeddings=node_embeddings,
-    )
-
-    scores = l2_trainer.evaluate(test_graphs, label_dict=dataset.labels)
-    _record_scores(table, "Revision-L1+L2", scores)
-    return scores
-
-
-# ============================================================
-# [FIX 4] run_revision_full (line ~720~730)
-# - 동일하게 _call_level1_trainer_fit keyword 통일
-# ============================================================
-def run_revision_full(dataset, cfg, table, setting):
-    # log.info("[Revision Full] Training Level1 + Level2 + Fusion …")
-
-    # train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
-    # log.info(
-    #     f"[Revision Full] split sizes: "
-    #     f"train={len(train_graphs)}, valid={len(valid_graphs)}, "
-    #     f"test={len(test_graphs)}, has_global_graph={dataset.global_graph is not None}"
-    # )
-
-    # # Level1
-    # l1_trainer = _build_level1_trainer(cfg)
-    # l1_fit_out = _call_level1_trainer_fit(
-    #     trainer=l1_trainer,
-    #     train_graphs=train_graphs,
-    #     valid_graphs=valid_graphs,
-    #     label_dict=dataset.labels,  # ✅ keyword 하나만
-    #     cfg=cfg,
-    # )
-    log.info("[Revision Full] Training Level1 + Level2 + Fusion ...")
- 
-    train_graphs = getattr(dataset, "train_graphs", []) or []
-    valid_graphs = getattr(dataset, "valid_graphs", []) or []
- 
-    l1_model = _build_level1_model(cfg)
- 
-    l1_trainer = Level1Trainer(
-        model=l1_model,
-        cfg=_nested_get(cfg, "training", "level1") or _nested_get(cfg, "trainer", "level1") or cfg,
-        optimizer=_build_optimizer(l1_model, cfg),
-    )
- 
-    _call_level1_trainer_fit(
-        l1_trainer,
-        train_graphs=train_graphs,
-        valid_graphs=valid_graphs,
-        label_dict=getattr(dataset, "labels", None),
-    )
-
-    # Level2 + Fusion
-    l2_trainer = _build_level2_trainer(cfg)
-    l2_fit_out = l2_trainer.fit(
-        train_graphs=train_graphs,
-        valid_graphs=valid_graphs,
-        label_dict=dataset.labels,
-        global_graph=dataset.global_graph,
-        node_embeddings=l1_fit_out.get("node_embeddings"),
-    )
-
-    scores = l2_trainer.evaluate(
-        test_graphs,
-        label_dict=dataset.labels,
-        global_graph=dataset.global_graph,
-    )
-    _record_scores(table, "Revision-Full", scores)
-    return scores
+# Replaced by consolidated versions later in the file
 
 
 
@@ -426,54 +253,85 @@ def _build_l2_dynamic_loader_builder(l1_model, cfg):
     def loader_builder(split, ids, label_dict=None, **kwargs):
         from gog_fraud.training.loops.level1 import _prepare_level1_loader
         from gog_fraud.data.level2.relation_builder import build_level2_graph, RelationBuilderConfig
-
-        try:
-            loader = _prepare_level1_loader(
-                ids, split_name=split, batch_size=128, shuffle=False, label_dict=label_dict, num_workers=0
-            )
-        except Exception as e:
-            log.warning("[Dynamic L2 Builder] Failed to prepare L1 loader: %s", e)
-            return None
-
-        l1_model.eval()
-        device = next(l1_model.parameters()).device
-        
-        all_emb, all_score, all_logits, all_id, all_label = [], [], [], [], []
+        from torch_geometric.loader import DataLoader as PyGDataLoader
         import torch
-        with torch.no_grad():
-            for batch in loader:
-                batch = batch.to(device)
-                out = l1_model(batch)
-                all_emb.append(out.embedding.cpu())
-                all_score.append(out.score.cpu().view(-1, 1))
-                all_logits.append(out.logits.cpu().view(-1, 1))
-                all_id.append(out.graph_id.cpu() if hasattr(out, "graph_id") and out.graph_id is not None else torch.zeros(out.score.size(0), dtype=torch.long))
-                if getattr(out, "label", None) is not None:
-                    all_label.append(out.label.cpu().view(-1, 1))
 
-        if not all_emb:
-            return None
+        # Determine default chunk size (configured as 16 by user)
+        default_chunk = int(_cfg_get(cfg, "eval_chunk_size", _nested_get(cfg, "level2", "eval_chunk_size") or 16))
+        
+        if split == "train":
+            chunk_size = int(_cfg_get(cfg, "train_chunk_size", _nested_get(cfg, "level2", "train_chunk_size") or default_chunk))
+            # Just split sequentially for training if needed, or shuffle
+            import random
+            shuffled_ids = list(ids)
+            random.shuffle(shuffled_ids)
+            id_chunks = [shuffled_ids[i : i + chunk_size] for i in range(0, len(shuffled_ids), chunk_size)]
+        else:
+            # STRATIFIED CHUNKING for Evaluation (to solve NaN metrics)
+            chunk_size = default_chunk
+            pos_ids = [i for i in ids if label_dict.get(getattr(i, "contract_id", i), 0) == 1]
+            neg_ids = [i for i in ids if label_dict.get(getattr(i, "contract_id", i), 0) == 0]
+            
+            id_chunks = []
+            # Chunks for positives
+            id_chunks += [pos_ids[i : i + chunk_size] for i in range(0, len(pos_ids), chunk_size)]
+            # Chunks for negatives (pure negatives ensure ROC-AUC defined)
+            # If we have very few negatives, make them smaller chunks to get n > 1
+            neg_chunk_size = min(chunk_size, max(2, len(neg_ids) // 2)) if len(neg_ids) > 1 else chunk_size
+            id_chunks += [neg_ids[i : i + neg_chunk_size] for i in range(0, len(neg_ids), neg_chunk_size)]
 
-        bundle = {
-            "embedding": torch.cat(all_emb, dim=0),
-            "score": torch.cat(all_score, dim=0),
-            "logits": torch.cat(all_logits, dim=0),
-            "graph_id": torch.cat(all_id, dim=0),
-        }
-        if all_label:
-            bundle["label"] = torch.cat(all_label, dim=0)
+        l2_graphs = []
+        for chunk_ids in id_chunks:
+            if not chunk_ids: continue
+            try:
+                loader = _prepare_level1_loader(
+                    chunk_ids, split_name=split, batch_size=128, shuffle=False, label_dict=label_dict, num_workers=0
+                )
+            except Exception as e:
+                log.warning("[Dynamic L2 Builder] Failed to prepare L1 loader for chunk: %s", e)
+                continue
+
+            l1_model.eval()
+            device = next(l1_model.parameters()).device
             
-        rel_cfg = RelationBuilderConfig()
-        if "relation_modes" in cfg.get("level2", {}):
-            rel_cfg.relation_modes = cfg["level2"]["relation_modes"]
-            
-        try:
-            l2_graph = build_level2_graph(bundle, rel_cfg)
-            from torch_geometric.loader import DataLoader as PyGDataLoader
-            return PyGDataLoader([l2_graph], batch_size=1, shuffle=False)
-        except Exception as e:
-            log.error("[Dynamic L2 Builder] Failed to build L2 graph: %s", e)
+            all_emb, all_score, all_logits, all_id, all_label = [], [], [], [], []
+            with torch.no_grad():
+                for batch in loader:
+                    batch = batch.to(device)
+                    out = l1_model(batch)
+                    all_emb.append(out.embedding.cpu())
+                    all_score.append(out.score.cpu().view(-1, 1))
+                    all_logits.append(out.logits.cpu().view(-1, 1))
+                    all_id.append(out.graph_id.cpu() if hasattr(out, "graph_id") and out.graph_id is not None else torch.zeros(out.score.size(0), dtype=torch.long))
+                    if getattr(out, "label", None) is not None:
+                        all_label.append(out.label.cpu().view(-1, 1))
+
+            if not all_emb:
+                continue
+
+            bundle = {
+                "embedding": torch.cat(all_emb, dim=0),
+                "score": torch.cat(all_score, dim=0),
+                "logits": torch.cat(all_logits, dim=0),
+                "graph_id": torch.cat(all_id, dim=0),
+            }
+            if all_label:
+                bundle["label"] = torch.cat(all_label, dim=0)
+                
+            rel_cfg = RelationBuilderConfig()
+            if "relation_modes" in cfg.get("level2", {}):
+                rel_cfg.relation_modes = cfg["level2"]["relation_modes"]
+                
+            try:
+                l2_graph = build_level2_graph(bundle, rel_cfg)
+                l2_graphs.append(l2_graph)
+            except Exception as e:
+                log.error("[Dynamic L2 Builder] Failed to build L2 graph chunk: %s", e)
+
+        if not l2_graphs:
             return None
+        
+        return PyGDataLoader(l2_graphs, batch_size=1, shuffle=(split == "train"))
 
     return loader_builder
 
@@ -519,9 +377,6 @@ def _call_level2_trainer_fit(
         valid_loader = None
     if valid_ids is not None and _is_empty(valid_ids):
         valid_ids = None
-
-    if loader_builder is None and l1_model is not None:
-        loader_builder = _build_l2_dynamic_loader_builder(l1_model, cfg or {})
 
     return trainer.fit(
         l1_model=l1_model,
@@ -588,12 +443,7 @@ def _cfg_to_attrdict(cfg: Any) -> AttrDict:
     return AttrDict({k: _convert(v) for k, v in data.items()})
 
 
-def _cfg_get(cfg: Any, key: str, default=None):
-    if cfg is None:
-        return default
-    if isinstance(cfg, dict):
-        return cfg.get(key, default)
-    return getattr(cfg, key, default)
+# Replaced by consolidated version at top
 
 
 # ---------------------------------------------------------------------------
@@ -609,10 +459,17 @@ def _load_config(path: str) -> dict:
 # ---------------------------------------------------------------------------
 def _get_split_graphs(dataset, cfg, setting):
     train, valid, test = dataset.train_graphs, dataset.valid_graphs, dataset.test_graphs
-    smoke_test = bool(_cfg_get(cfg, "smoke_test", default=False))  # 기존 그대로
+    smoke_val = _cfg_get(cfg, "smoke_test", default=None)
+    if smoke_val is None:
+        smoke_val = _nested_get(cfg, "dataset", "smoke_test", default=False)
+    smoke_test = bool(smoke_val)
+
+    norm_val = _cfg_get(cfg, "normalize_features", default=None)
+    if norm_val is None:
+        norm_val = _nested_get(cfg, "dataset", "normalize_features", default=False)
+    normalize_features = bool(norm_val)
 
     if smoke_test:
-        # 최소 1개 보장 (ValueError 방지 강화)
         train_limit = max(len(train) // 25, 1)
         valid_limit = max(len(valid) // 10, 1)
         test_limit = max(len(test) // 5, 1)
@@ -622,24 +479,64 @@ def _get_split_graphs(dataset, cfg, setting):
 
     def _filter_mismatched_graphs(g_list):
         if not g_list: return g_list
-        first_dim = None
+        # Reference dimensions from first graph
+        ref_x_dim = None
+        ref_edge_dim = None
+        ref_struct_dim = None
+        
         filtered = []
         for g in g_list:
             data = g.graph if hasattr(g, "graph") else g
             if not hasattr(data, "x") or data.x is None:
                 continue
-            dim = data.x.size(1) if data.x.dim() > 1 else 1
-            if first_dim is None:
-                first_dim = dim
-            if dim == first_dim:
+            
+            x_dim = data.x.size(-1)
+            # Edge attr check
+            e_dim = data.edge_attr.size(-1) if hasattr(data, "edge_attr") and data.edge_attr is not None else 0
+            # Struct feat check
+            struct_dim = data.struct_feat.size(-1) if hasattr(data, "struct_feat") and data.struct_feat is not None else 0
+            
+            # [Fix] Remove problematic single-letter attributes (like 's') if they exist, 
+            # to prevent PyG collation errors.
+            for k in list(data.keys()):
+                if k == "s":
+                    del data[k]
+
+            if ref_x_dim is None:
+                ref_x_dim = x_dim
+                ref_edge_dim = e_dim
+                ref_struct_dim = struct_dim
+            
+            if x_dim == ref_x_dim and e_dim == ref_edge_dim and struct_dim == ref_struct_dim:
                 filtered.append(g)
+            else:
+                log.warning(f"Filter drop graph: x={x_dim}(ref={ref_x_dim}), e={e_dim}(ref={ref_edge_dim}), s={struct_dim}(ref={ref_struct_dim})")
         return filtered
 
     train = _filter_mismatched_graphs(train)
     valid = _filter_mismatched_graphs(valid)
     test = _filter_mismatched_graphs(test)
 
-    # 디버그 로그 추가 (선택적: 문제 추적 용이)
+    # [Normalization]
+    if normalize_features and train:
+        log.info("[Normalization] Applying standard scaling to node features x …")
+        all_x = []
+        for g in train:
+            data = g.graph if hasattr(g, "graph") else g
+            all_x.append(data.x)
+        all_x_cat = torch.cat(all_x, dim=0)
+        mean = all_x_cat.mean(dim=0, keepdim=True)
+        std = all_x_cat.std(dim=0, keepdim=True) + 1e-6
+        
+        def _apply_norm(g_list):
+            for g in g_list:
+                data = g.graph if hasattr(g, "graph") else g
+                data.x = (data.x - mean) / std
+
+        _apply_norm(train)
+        _apply_norm(valid)
+        _apply_norm(test)
+
     log.info(
         f"[get_split_graphs] smoke={smoke_test}, "
         f"train={len(train)}, valid={len(valid)}, test={len(test)}"
@@ -942,12 +839,12 @@ def run_revision_l1_l2(dataset, cfg, table, setting):
             trainer=l1_trainer,
             train_graphs=train_graphs,
             valid_graphs=valid_graphs,
-            label_dict=dataset.labels,  # ✅ keyword 하나만
+            label_dict=dataset.labels,
             cfg=cfg,
         )
     except Exception as e:
         log.error(f"[Revision L1+L2] Level1 fit failed: {e}", exc_info=True)
-        raise  # ✅ fallback 직접 호출 제거 → 동일 에러 반복 방지
+        raise
  
     # Level2 Trainer
     l2_trainer = _build_level2_trainer(cfg, l1_trainer.model)
@@ -958,11 +855,14 @@ def run_revision_l1_l2(dataset, cfg, table, setting):
         train_ids=train_graphs,
         valid_ids=valid_graphs,
         labels=dataset.labels,
+        global_graph=dataset.global_graph,
+        loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg),
     )
  
     metrics, yt, ys = l2_trainer.evaluate(
         test_graphs, 
         label_dict=dataset.labels,
+        global_graph=dataset.global_graph,      # ✅ Added missing global_graph
         loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg),
         return_preds=True
     )
@@ -989,13 +889,17 @@ def run_revision_full(dataset, cfg, table, setting):
  
     # Level1
     l1_trainer = _build_level1_trainer(cfg)
-    l1_fit_out = _call_level1_trainer_fit(
-        trainer=l1_trainer,
-        train_graphs=train_graphs,
-        valid_graphs=valid_graphs,
-        label_dict=dataset.labels,  # ✅ keyword 하나만
-        cfg=cfg,
-    )
+    try:
+        l1_fit_out = _call_level1_trainer_fit(
+            trainer=l1_trainer,
+            train_graphs=train_graphs,
+            valid_graphs=valid_graphs,
+            label_dict=dataset.labels,
+            cfg=cfg,
+        )
+    except Exception as e:
+        log.error(f"[Revision Full] Level1 fit failed: {e}", exc_info=True)
+        raise
  
     # Level2 + Fusion
     l2_trainer = _build_level2_trainer(cfg, l1_trainer.model)
@@ -1007,12 +911,13 @@ def run_revision_full(dataset, cfg, table, setting):
         valid_ids=valid_graphs,
         labels=dataset.labels,
         global_graph=dataset.global_graph,
+        loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg),
     )
  
     metrics, yt, ys = l2_trainer.evaluate(
         test_graphs,
         label_dict=dataset.labels,
-        global_graph=dataset.global_graph,
+        global_graph=dataset.global_graph,      # ✅ Added missing global_graph
         loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg),
         return_preds=True
     )
@@ -1178,8 +1083,8 @@ def main():
 
     try:
         run_revision_l1(dataset, cfg, table, setting)
-    except Exception as e:
-        print(f"Error when running L1: {e}")
+    except Exception:
+        log.exception("[Benchmark] Revision L1 failed")
 
     # =====================================================================
     log.info("")

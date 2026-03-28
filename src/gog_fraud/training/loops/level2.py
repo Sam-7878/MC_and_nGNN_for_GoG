@@ -183,9 +183,6 @@ def _prepare_level2_loader(
     if source is None:
         return None
 
-    if _is_loader_like(source):
-        return source
-
     if loader_builder is not None:
         built = _call_compatible(
             loader_builder,
@@ -205,6 +202,9 @@ def _prepare_level2_loader(
         )
         if built is not None:
             return built
+
+    if _is_loader_like(source):
+        return source
 
     if _can_auto_build_graph_loader(source):
         return _build_pyg_loader(source, batch_size=batch_size, shuffle=shuffle)
@@ -333,8 +333,8 @@ class Level2Trainer:
                 loader_builder=loader_builder,
                 **kwargs,
             )
-        except Exception as exc:
-            log.warning("[Level2Trainer] Could not build valid loader: %s", exc)
+        except Exception:
+            log.exception("[Level2Trainer] Could not build valid loader")
             loader = None
 
         if loader is None or (_safe_len(loader) == 0):
