@@ -20,7 +20,7 @@ from gog_fraud.models.level2.model import Level2Model
 from gog_fraud.training.loops.level1 import Level1Trainer
 from gog_fraud.training.loops.level2 import Level2Trainer
 from gog_fraud.training.loops.level1 import Level1Trainer
-from gog_fraud.models.level1.level1_gnn import Level1GNN   # 예시 모델 위치
+from gog_fraud.models.level1.model import Level1Model
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,21 +90,17 @@ def _resolve_device(cfg):
 def _build_level1_model(cfg):
     """
     Level1 모델을 config 기반으로 생성한다.
-    우선 Level1GNN.from_config(cfg)를 사용하고,
+    우선 Level1Model.from_config(cfg)를 사용하고,
     필요시 device로 이동한다.
     """
-    # model_cfg = (
-    #     _nested_get(cfg, "model", "level1")
-    #     or _nested_get(cfg, "level1")
-    #     or _nested_get(cfg, "model")
-    #     or cfg
-    # )
+    model_cfg = (
+        _nested_get(cfg, "model", "level1")
+        or _nested_get(cfg, "level1")
+        or _nested_get(cfg, "model")
+        or cfg
+    )
 
-    # # model = Level1GNN.from_config(cfg)
-    # model = Level1GNN.from_config(model_cfg)
-    # device = _resolve_device(cfg)
-    # return model.to(device)
-    return Level1GNN.from_config(cfg).to(_resolve_device(cfg))
+    return Level1Model.from_config(model_cfg).to(_resolve_device(cfg))
 
 
 def _normalize_graph_splits(dataset):
@@ -181,21 +177,20 @@ def _build_level1_trainer(cfg: dict) -> "Level1Trainer":
     """
 
     l1_cfg = cfg.get("level1", {})
-    model = Level1GNN(
-        in_dim=l1_cfg.get("in_dim", 16),
-        hidden_dim=l1_cfg.get("hidden_dim", 128),
-        out_dim=l1_cfg.get("out_dim", 16),
-        num_layers=l1_cfg.get("num_layers", 3),
-        dropout=l1_cfg.get("dropout", 0.2),
+    
+    model_cfg = (
+        _nested_get(cfg, "model", "level1")
+        or _nested_get(cfg, "level1")
+        or _nested_get(cfg, "model")
+        or cfg
     )
+    
+    model = Level1Model.from_config(model_cfg)
     return Level1Trainer(
         model=model,
         cfg=_nested_get(cfg, "training", "level1") or _nested_get(cfg, "trainer", "level1") or cfg,
         optimizer=_build_optimizer(model, l1_cfg),
         device=cfg.get("device", "cuda"),
-        epochs=l1_cfg.get("epochs", 50),
-        lr=l1_cfg.get("lr", 1e-3),
-        weight_decay=l1_cfg.get("weight_decay", 1e-5),
     )
 
 
@@ -207,22 +202,26 @@ def _build_level2_trainer(cfg: dict) -> "Level2Trainer":
     cfg['level2'] 하위 키를 읽어 Level2Trainer 인스턴스를 반환.
     """
     from gog_fraud.training.loops.level2 import Level2Trainer
-    from gog_fraud.models.level2_gnn import Level2GNN   # 예시 모델 위치
+    from gog_fraud.models.level2.model import Level2Model
 
     l2_cfg = cfg.get("level2", {})
-    model = Level2GNN(
-        in_dim=l2_cfg.get("in_dim", 16),      # 보통 Level1 out_dim 과 동일
-        hidden_dim=l2_cfg.get("hidden_dim", 128),
-        out_dim=l2_cfg.get("out_dim", 2),      # 이진 분류 가정
-        num_layers=l2_cfg.get("num_layers", 3),
-        dropout=l2_cfg.get("dropout", 0.2),
+    
+    model_cfg = (
+        _nested_get(cfg, "model", "level2")
+        or _nested_get(cfg, "level2")
+        or _nested_get(cfg, "model")
+        or cfg
     )
+    
+    model = Level2Model.from_config(model_cfg)
+    
+    cfg_obj = _nested_get(cfg, "training", "level2") or _nested_get(cfg, "trainer", "level2") or cfg
+    
     return Level2Trainer(
         model=model,
+        optimizer=_build_optimizer(model, l2_cfg),
+        cfg=cfg_obj,
         device=cfg.get("device", "cuda"),
-        epochs=l2_cfg.get("epochs", 50),
-        lr=l2_cfg.get("lr", 1e-3),
-        weight_decay=l2_cfg.get("weight_decay", 1e-5),
     )
 
 

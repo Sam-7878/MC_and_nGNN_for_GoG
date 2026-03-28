@@ -480,14 +480,10 @@ class Level1TrainerConfig:
 
 
 class Level1Trainer:
-    def __init__(self, model, optimizer, cfg, epochs = 50, batch_size = 16, lr = 1e-3, weight_decay=1e-5, device=None):
+    def __init__(self, model, optimizer, cfg, device=None):
         self.model = model
         self.optimizer = optimizer
         self.cfg = _cfg_norm(cfg)
-        self.epochs = epochs
-        self.batch_size = batch_size
-        self.lr = lr
-        self.weight_decay = weight_decay
 
         if device is not None:
             self.device = device

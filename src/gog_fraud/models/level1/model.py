@@ -311,9 +311,9 @@ class Level1Model(nn.Module):
             ) from e
 
     @torch.no_grad()
-    def predict(self, graph):
+    def predict(self, *args, **kwargs):
         self.eval()
-        out = self(graph)
+        out = self.forward(*args, **kwargs)
 
         # 여러 반환 형식 호환
         if hasattr(out, "score"):

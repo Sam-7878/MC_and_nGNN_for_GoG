@@ -774,10 +774,11 @@ class FusionTrainer:
         self.fusion.eval_mode()
 
         return {
-            "best_score":  best_score,
-            "val_metric":  self.cfg.val_metric,
             "history":     history,
-            "total_epochs": len(history),
+            "best_score":  best_score,
+            "best_metric": self.cfg.val_metric,
+            "best_mode":   "max",  # Assuming PR-AUC/F1 are max metrics
+            "epochs_ran":  len(history),
         }
 
 

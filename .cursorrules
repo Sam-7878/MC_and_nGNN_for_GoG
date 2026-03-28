@@ -27,7 +27,7 @@ Once the Level 1 + Level 2 benchmark pipeline is perfectly stable, we will integ
 2. **Sanitize Data for Legacy:** PyGOD models crash with `slice` errors on `NeighborLoader`. Always extract pure `Data(x, edge_index, y)` before feeding into legacy models.
 3. **Memory Efficiency:** 8GB GPU limit. Use `autocast`, `del`, and `torch.cuda.empty_cache()` where necessary.
 4. **No Duplicate Functions:** Review the whole file before adding a new helper method.
-5. **Do not break existing interfaces:** The data pipeline passes `TransactionGraph` objects. Always safely unwrap them to PyG `Data` objects when feeding into models or loaders.
+5. **Do not break existing interfaces:** The data pipeline passes `TransactionGraph` objects. Always safely unwrap them to PyG `Data` objects when feeding into models or loaders. Also, please standardize them according to the most appropriate policy when class or method interfaces do not match.
 6. **Dynamic Dimensions:** Never hardcode tensor shapes like `in_dim`. Always infer them dynamically from the dataset or batch (e.g., `data.x.size(-1)`).
 7. **No Duplicate Functions:** When modifying a file, analyze the entire file first to ensure you are not creating duplicate functions or ignoring existing helper methods.
 8. **Memory Efficiency:** I am running this on a laptop with an 8GB GPU. Be aggressive about clearing unused variables (`del`, `torch.cuda.empty_cache()`), using proper `batch_size`, and leveraging `autocast` (Mixed Precision) where applicable.

@@ -12,6 +12,7 @@ lightning_logs/
 
 # Graph database files
 doc/
+docs/
 GoG/    
 result/
 results/
