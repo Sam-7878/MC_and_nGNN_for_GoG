@@ -78,7 +78,7 @@ class Level2Output:
 
 @dataclass
 class Level2ModelConfig:
-    in_dim:          int           # Level 1 emb dim + 1 (score)
+    in_dim:          int  = 16     # Level 1 emb dim + 1 (score)
     hidden_dim:      int  = 128
     num_layers:      int  = 2
     num_heads:       int  = 4

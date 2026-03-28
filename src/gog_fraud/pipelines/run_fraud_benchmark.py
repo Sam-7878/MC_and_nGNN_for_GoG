@@ -130,6 +130,17 @@ def _record_skip(table, model_name: str, reason: str, setting: str):
         pass
 
 
+def _record_scores(table, model_name: str, scores: dict):
+    try:
+        if isinstance(table, list):
+            row = {"model": model_name, "status": "success"}
+            if isinstance(scores, dict):
+                row.update(scores)
+            table.append(row)
+    except Exception as e:
+        log.warning(f"Could not record scores for {model_name}: {e}")
+
+
 # ============================================================
 # [FIX 1] _call_level1_trainer_fit (line ~85~120)
 # - label_dict 중복 전달 제거
@@ -197,7 +208,7 @@ def _build_level1_trainer(cfg: dict) -> "Level1Trainer":
 # ------------------------------------------------------------------
 # 2) Level-2 trainer builder
 # ------------------------------------------------------------------
-def _build_level2_trainer(cfg: dict) -> "Level2Trainer":
+def _build_level2_trainer(cfg: dict, l1_model=None) -> "Level2Trainer":
     """
     cfg['level2'] 하위 키를 읽어 Level2Trainer 인스턴스를 반환.
     """
@@ -212,6 +223,13 @@ def _build_level2_trainer(cfg: dict) -> "Level2Trainer":
         or _nested_get(cfg, "model")
         or cfg
     )
+    
+    import copy
+    model_cfg = copy.deepcopy(model_cfg)
+    if l1_model is not None and "in_dim" not in model_cfg:
+        l1_out_dim = getattr(l1_model, "out_dim", 256)
+        # Level 1 embedding + score
+        model_cfg["in_dim"] = l1_out_dim + 1
     
     model = Level2Model.from_config(model_cfg)
     
@@ -404,6 +422,61 @@ def run_revision_full(dataset, cfg, table, setting):
 
 
 
+def _build_l2_dynamic_loader_builder(l1_model, cfg):
+    def loader_builder(split, ids, label_dict=None, **kwargs):
+        from gog_fraud.training.loops.level1 import _prepare_level1_loader
+        from gog_fraud.data.level2.relation_builder import build_level2_graph, RelationBuilderConfig
+
+        try:
+            loader = _prepare_level1_loader(
+                ids, split_name=split, batch_size=128, shuffle=False, label_dict=label_dict, num_workers=0
+            )
+        except Exception as e:
+            log.warning("[Dynamic L2 Builder] Failed to prepare L1 loader: %s", e)
+            return None
+
+        l1_model.eval()
+        device = next(l1_model.parameters()).device
+        
+        all_emb, all_score, all_logits, all_id, all_label = [], [], [], [], []
+        import torch
+        with torch.no_grad():
+            for batch in loader:
+                batch = batch.to(device)
+                out = l1_model(batch)
+                all_emb.append(out.embedding.cpu())
+                all_score.append(out.score.cpu().view(-1, 1))
+                all_logits.append(out.logits.cpu().view(-1, 1))
+                all_id.append(out.graph_id.cpu() if hasattr(out, "graph_id") and out.graph_id is not None else torch.zeros(out.score.size(0), dtype=torch.long))
+                if getattr(out, "label", None) is not None:
+                    all_label.append(out.label.cpu().view(-1, 1))
+
+        if not all_emb:
+            return None
+
+        bundle = {
+            "embedding": torch.cat(all_emb, dim=0),
+            "score": torch.cat(all_score, dim=0),
+            "logits": torch.cat(all_logits, dim=0),
+            "graph_id": torch.cat(all_id, dim=0),
+        }
+        if all_label:
+            bundle["label"] = torch.cat(all_label, dim=0)
+            
+        rel_cfg = RelationBuilderConfig()
+        if "relation_modes" in cfg.get("level2", {}):
+            rel_cfg.relation_modes = cfg["level2"]["relation_modes"]
+            
+        try:
+            l2_graph = build_level2_graph(bundle, rel_cfg)
+            from torch_geometric.loader import DataLoader as PyGDataLoader
+            return PyGDataLoader([l2_graph], batch_size=1, shuffle=False)
+        except Exception as e:
+            log.error("[Dynamic L2 Builder] Failed to build L2 graph: %s", e)
+            return None
+
+    return loader_builder
+
 def _call_level2_trainer_fit(
     trainer,
     *,
@@ -415,6 +488,7 @@ def _call_level2_trainer_fit(
     train_loader=None,
     valid_loader=None,
     loader_builder=None,
+    cfg=None,
     **kwargs,
 ):
     if global_graph is None:
@@ -445,6 +519,9 @@ def _call_level2_trainer_fit(
         valid_loader = None
     if valid_ids is not None and _is_empty(valid_ids):
         valid_ids = None
+
+    if loader_builder is None and l1_model is not None:
+        loader_builder = _build_l2_dynamic_loader_builder(l1_model, cfg or {})
 
     return trainer.fit(
         l1_model=l1_model,
@@ -855,16 +932,21 @@ def run_revision_l1_l2(dataset, cfg, table, setting):
         raise  # ✅ fallback 직접 호출 제거 → 동일 에러 반복 방지
  
     # Level2 Trainer
-    l2_trainer = _build_level2_trainer(cfg)
-    node_embeddings = l1_fit_out.get("node_embeddings", None)
-    l2_fit_out = l2_trainer.fit(
-        train_graphs=train_graphs,
-        valid_graphs=valid_graphs,
-        label_dict=dataset.labels,
-        node_embeddings=node_embeddings,
+    l2_trainer = _build_level2_trainer(cfg, l1_trainer.model)
+    l2_fit_out = _call_level2_trainer_fit(
+        trainer=l2_trainer,
+        l1_model=l1_trainer.model,
+        cfg=cfg,
+        train_ids=train_graphs,
+        valid_ids=valid_graphs,
+        labels=dataset.labels,
     )
  
-    scores = l2_trainer.evaluate(test_graphs, label_dict=dataset.labels)
+    scores = l2_trainer.evaluate(
+        test_graphs, 
+        label_dict=dataset.labels,
+        loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg)
+    )
     _record_scores(table, "Revision-L1+L2", scores)
     return scores
 
@@ -894,19 +976,22 @@ def run_revision_full(dataset, cfg, table, setting):
     )
  
     # Level2 + Fusion
-    l2_trainer = _build_level2_trainer(cfg)
-    l2_fit_out = l2_trainer.fit(
-        train_graphs=train_graphs,
-        valid_graphs=valid_graphs,
-        label_dict=dataset.labels,
+    l2_trainer = _build_level2_trainer(cfg, l1_trainer.model)
+    l2_fit_out = _call_level2_trainer_fit(
+        trainer=l2_trainer,
+        l1_model=l1_trainer.model,
+        cfg=cfg,
+        train_ids=train_graphs,
+        valid_ids=valid_graphs,
+        labels=dataset.labels,
         global_graph=dataset.global_graph,
-        node_embeddings=l1_fit_out.get("node_embeddings"),
     )
  
     scores = l2_trainer.evaluate(
         test_graphs,
         label_dict=dataset.labels,
         global_graph=dataset.global_graph,
+        loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg)
     )
     _record_scores(table, "Revision-Full", scores)
     return scores

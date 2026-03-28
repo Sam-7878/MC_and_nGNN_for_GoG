@@ -220,7 +220,7 @@ class Level2Trainer:
         self,
         model,
         optimizer,
-        cfg: Level2TrainerConfig,
+        cfg: "Any",
         device: Optional[str] = None,
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -228,13 +228,15 @@ class Level2Trainer:
         self.optimizer = optimizer
         self.cfg = cfg
 
-        self.use_amp = bool(cfg.use_amp and self.device.startswith("cuda"))
+        raw_amp = _cfg_get(cfg, "use_amp", True)
+        self.use_amp = bool(raw_amp and self.device.startswith("cuda"))
         self.scaler = GradScaler("cuda", enabled=self.use_amp)
 
+        raw_pos_weight = _cfg_get(cfg, "pos_weight", None)
         pos_weight = None
-        if cfg.pos_weight is not None:
+        if raw_pos_weight is not None:
             pos_weight = torch.tensor(
-                [cfg.pos_weight],
+                [raw_pos_weight],
                 dtype=torch.float32,
                 device=self.device,
             )
@@ -310,7 +312,31 @@ class Level2Trainer:
         return metrics
 
     @torch.no_grad()
-    def evaluate(self, loader) -> Dict[str, float]:
+    def evaluate(self, loader=None, l1_model=None, global_graph=None, label_dict=None, loader_builder=None, **kwargs) -> Dict[str, float]:
+        eval_source = loader
+        for key in ("eval_loader", "val_loader", "eval_ids", "valid_ids", "test_ids", "test_graphs"):
+            if eval_source is None and key in kwargs and kwargs[key] is not None:
+                eval_source = kwargs[key]
+                break
+
+        _batch_size = int(_cfg_get(self.cfg, "batch_size", 8))
+
+        try:
+            loader = _prepare_level2_loader(
+                eval_source,
+                split="eval",
+                batch_size=_batch_size,
+                shuffle=False,
+                l1_model=l1_model,
+                global_graph=global_graph,
+                label_dict=label_dict,
+                loader_builder=loader_builder,
+                **kwargs,
+            )
+        except Exception as exc:
+            log.warning("[Level2Trainer] Could not build valid loader: %s", exc)
+            loader = None
+
         if loader is None or (_safe_len(loader) == 0):
             log.warning("[Level2Trainer] Empty valid loader. Returning zero metrics.")
             return _empty_level2_metrics()

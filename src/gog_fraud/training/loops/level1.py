@@ -59,7 +59,7 @@ def _to_pyg_data(item: Any) -> Optional[Data]:
     return None
 
 
-def _unwrap_to_data_list(items: Any) -> List[Data]:
+def _unwrap_to_data_list(items: Any, label_dict: Optional[dict] = None) -> List[Data]:
     """
     Converts any sequence of TransactionGraph/Data objects into
     a flat list[Data], skipping items that cannot be converted.
@@ -83,6 +83,9 @@ def _unwrap_to_data_list(items: Any) -> List[Data]:
     for x in seq:
         data = _to_pyg_data(x)
         if data is not None:
+            if label_dict is not None and hasattr(x, "contract_id") and x.contract_id in label_dict:
+                import torch
+                data.y = torch.tensor([label_dict[x.contract_id]], dtype=torch.float32)
             out.append(data)
         else:
             skipped += 1
@@ -401,6 +404,7 @@ def _prepare_level1_loader(
     batch_size=16,
     shuffle=False,
     num_workers=0,
+    label_dict=None,
 ):
     """
     Resolves a PyG DataLoader from a variety of input types.
@@ -432,7 +436,7 @@ def _prepare_level1_loader(
             data_or_loader = built  # re-assign and continue to fallback
 
     # ── 3. Automatic unwrap + PyGDataLoader
-    data_list = _unwrap_to_data_list(data_or_loader)
+    data_list = _unwrap_to_data_list(data_or_loader, label_dict=label_dict)
 
     if not data_list:
         raise ValueError(
@@ -574,7 +578,30 @@ class Level1Trainer:
         return metrics
 
     @torch.no_grad()
-    def evaluate(self, loader) -> Dict[str, float]:
+    def evaluate(self, loader=None, label_dict=None, loader_builder=None, **kwargs) -> Dict[str, float]:
+        eval_source = loader
+        for key in ("eval_graphs", "test_graphs", "valid_graphs", "data"):
+            if eval_source is None and key in kwargs and kwargs[key] is not None:
+                eval_source = kwargs[key]
+                break
+
+        _batch_size = int(_cfg_get(self.cfg, "batch_size", 16))
+        _num_workers = int(_cfg_get(self.cfg, "num_workers", 0))
+
+        try:
+            loader = _prepare_level1_loader(
+                eval_source,
+                split_name="eval",
+                loader_builder=loader_builder,
+                batch_size=_batch_size,
+                shuffle=False,
+                num_workers=_num_workers,
+                label_dict=label_dict,
+            )
+        except Exception as exc:
+            log.warning("[Level1Trainer] Could not build valid loader: %s", exc)
+            loader = None
+
         if loader is None or (_safe_len(loader) == 0):
             log.warning("[Level1Trainer] Empty valid loader. Returning zero metrics.")
             return _empty_binary_metrics()
@@ -654,6 +681,7 @@ class Level1Trainer:
                 batch_size=_batch_size,
                 shuffle=True,
                 num_workers=_num_workers,
+                label_dict=label_dict,
             )
         except (TypeError, ValueError) as exc:
             raise TypeError(
@@ -669,6 +697,7 @@ class Level1Trainer:
                 batch_size=_batch_size,
                 shuffle=False,
                 num_workers=_num_workers,
+                label_dict=label_dict,
             ) if valid_source is not None else None
         except (TypeError, ValueError) as exc:
             log.warning(
