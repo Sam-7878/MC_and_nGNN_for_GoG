@@ -620,6 +620,25 @@ def _get_split_graphs(dataset, cfg, setting):
         valid = valid[:valid_limit]
         test = test[:test_limit]
 
+    def _filter_mismatched_graphs(g_list):
+        if not g_list: return g_list
+        first_dim = None
+        filtered = []
+        for g in g_list:
+            data = g.graph if hasattr(g, "graph") else g
+            if not hasattr(data, "x") or data.x is None:
+                continue
+            dim = data.x.size(1) if data.x.dim() > 1 else 1
+            if first_dim is None:
+                first_dim = dim
+            if dim == first_dim:
+                filtered.append(g)
+        return filtered
+
+    train = _filter_mismatched_graphs(train)
+    valid = _filter_mismatched_graphs(valid)
+    test = _filter_mismatched_graphs(test)
+
     # 디버그 로그 추가 (선택적: 문제 추적 용이)
     log.info(
         f"[get_split_graphs] smoke={smoke_test}, "
@@ -820,21 +839,18 @@ def run_legacy_baselines(
             score_reduce=       base_adapter_cfg.score_reduce,
             progress_every=     base_adapter_cfg.progress_every)
         
-        log.info('***before batch.run_all for legacy baselines, test_graphs count: %d', len(test_graphs))
-        all_scores = batch.run_all(model_name = model_names[0], test_graphs=test_graphs)
+        log.info('***before batch.run_many for legacy baselines, test_graphs count: %d', len(test_graphs))
+        all_scores = batch.run_many(model_names=model_names, graphs=test_graphs)
 
-        log.info('***before checking all_scores for legacy baselines, all_scores type: %s and value: %s', type(all_scores).__name__, 
-                 all_scores[0:3] if isinstance(all_scores, (list, dict)) else str(all_scores))
-
-        if (all_scores is None) or (all_scores == {}) or (not isinstance(all_scores, dict)):
+        if not all_scores:
             log.warning(f"[Legacy] ---- No scores returned from batch runner!")
             return
         
         log.info(f"[Legacy] Models run: {list(all_scores.keys())}")
 
-        for model_name, score_dict in all_scores.items():
+        for model_name, run_output in all_scores.items():
+            score_dict = {r.contract_id: r.score for r in run_output.records}
             contract_ids = [g.contract_id for g in test_graphs]
-            log.info(f"Processing model: {model_name}, score_dict keys: {list(score_dict.keys())[:3]}..., contract_ids: {contract_ids[:3]}...")
 
             filtered = [(float(score_dict.get(cid, 0.0)), int(dataset.labels[cid])) for cid in contract_ids if cid in dataset.labels] 
             log.info(f"Filtered scores for model {model_name}: {filtered[:3]}... (total {len(filtered)})")
@@ -846,7 +862,6 @@ def run_legacy_baselines(
             ys_arr = [x[0] for x in filtered]
             yt_arr = [x[1] for x in filtered]
 
-            log.info('***before evaluate_benchmark for model_name: %s', model_name)
             result = evaluate_benchmark(
                 y_true=yt_arr,
                 y_score=ys_arr,
@@ -902,9 +917,12 @@ def run_revision_l1(dataset, cfg, table, setting):
         raise
  
     # 평가
-    scores = trainer.evaluate(test_graphs, label_dict=dataset.labels)
-    _record_scores(table, "Revision-L1", scores)
-    return scores
+    metrics, yt, ys = trainer.evaluate(test_graphs, label_dict=dataset.labels, return_preds=True)
+    from gog_fraud.evaluation.benchmark import evaluate_benchmark
+    res = evaluate_benchmark(y_true=yt, y_score=ys, model_name="Revision-L1", setting=setting)
+    if hasattr(table, "add"):
+        table.add(res)
+    return metrics
 
 
 # ============================================================
@@ -942,13 +960,17 @@ def run_revision_l1_l2(dataset, cfg, table, setting):
         labels=dataset.labels,
     )
  
-    scores = l2_trainer.evaluate(
+    metrics, yt, ys = l2_trainer.evaluate(
         test_graphs, 
         label_dict=dataset.labels,
-        loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg)
+        loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg),
+        return_preds=True
     )
-    _record_scores(table, "Revision-L1+L2", scores)
-    return scores
+    from gog_fraud.evaluation.benchmark import evaluate_benchmark
+    res = evaluate_benchmark(y_true=yt, y_score=ys, model_name="Revision-L1+L2", setting=setting)
+    if hasattr(table, "add"):
+        table.add(res)
+    return metrics
 
 
 # ============================================================
@@ -987,14 +1009,18 @@ def run_revision_full(dataset, cfg, table, setting):
         global_graph=dataset.global_graph,
     )
  
-    scores = l2_trainer.evaluate(
+    metrics, yt, ys = l2_trainer.evaluate(
         test_graphs,
         label_dict=dataset.labels,
         global_graph=dataset.global_graph,
-        loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg)
+        loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg),
+        return_preds=True
     )
-    _record_scores(table, "Revision-Full", scores)
-    return scores
+    from gog_fraud.evaluation.benchmark import evaluate_benchmark
+    res = evaluate_benchmark(y_true=yt, y_score=ys, model_name="Revision-Full", setting=setting)
+    if hasattr(table, "add"):
+        table.add(res)
+    return metrics
 
 
 # ---------------------------------------------------------------------------

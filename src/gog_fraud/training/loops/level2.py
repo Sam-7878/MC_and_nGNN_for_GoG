@@ -312,7 +312,7 @@ class Level2Trainer:
         return metrics
 
     @torch.no_grad()
-    def evaluate(self, loader=None, l1_model=None, global_graph=None, label_dict=None, loader_builder=None, **kwargs) -> Dict[str, float]:
+    def evaluate(self, loader=None, l1_model=None, global_graph=None, label_dict=None, loader_builder=None, return_preds=False, **kwargs) -> Dict[str, float]:
         eval_source = loader
         for key in ("eval_loader", "val_loader", "eval_ids", "valid_ids", "test_ids", "test_graphs"):
             if eval_source is None and key in kwargs and kwargs[key] is not None:
@@ -339,6 +339,9 @@ class Level2Trainer:
 
         if loader is None or (_safe_len(loader) == 0):
             log.warning("[Level2Trainer] Empty valid loader. Returning zero metrics.")
+            if return_preds:
+                import numpy as np
+                return _empty_level2_metrics(), np.array([]), np.array([])
             return _empty_level2_metrics()
 
         self.model.eval()
@@ -366,6 +369,9 @@ class Level2Trainer:
             all_score.append(out.score.detach().cpu())
 
         if not all_y:
+            if return_preds:
+                import numpy as np
+                return _empty_level2_metrics(), np.array([]), np.array([])
             return _empty_level2_metrics()
 
         all_y = torch.cat(all_y, dim=0)
@@ -373,6 +379,8 @@ class Level2Trainer:
 
         metrics = compute_level2_metrics(all_y, all_score)
         metrics["loss"] = total_loss / max(num_batches, 1)
+        if return_preds:
+            return metrics, all_y.cpu().numpy(), all_score.cpu().numpy()
         return metrics
 
     def fit(

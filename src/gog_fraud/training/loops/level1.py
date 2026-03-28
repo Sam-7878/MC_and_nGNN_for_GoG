@@ -578,7 +578,7 @@ class Level1Trainer:
         return metrics
 
     @torch.no_grad()
-    def evaluate(self, loader=None, label_dict=None, loader_builder=None, **kwargs) -> Dict[str, float]:
+    def evaluate(self, loader=None, label_dict=None, loader_builder=None, return_preds=False, **kwargs) -> Dict[str, float]:
         eval_source = loader
         for key in ("eval_graphs", "test_graphs", "valid_graphs", "data"):
             if eval_source is None and key in kwargs and kwargs[key] is not None:
@@ -604,6 +604,9 @@ class Level1Trainer:
 
         if loader is None or (_safe_len(loader) == 0):
             log.warning("[Level1Trainer] Empty valid loader. Returning zero metrics.")
+            if return_preds:
+                import numpy as np
+                return _empty_binary_metrics(), np.array([]), np.array([])
             return _empty_binary_metrics()
 
         self.model.eval()
@@ -629,6 +632,9 @@ class Level1Trainer:
             all_score.append(out.score.detach().cpu())
 
         if not all_y:
+            if return_preds:
+                import numpy as np
+                return _empty_binary_metrics(), np.array([]), np.array([])
             return _empty_binary_metrics()
 
         all_y = torch.cat(all_y, dim=0)
@@ -636,6 +642,8 @@ class Level1Trainer:
 
         metrics = compute_binary_metrics(all_y, all_score)
         metrics["loss"] = total_loss / max(num_batches, 1)
+        if return_preds:
+            return metrics, all_y.cpu().numpy(), all_score.cpu().numpy()
         return metrics
 
     def fit(

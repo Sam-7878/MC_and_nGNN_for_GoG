@@ -516,68 +516,7 @@ class LegacyBatchRunner:
     #             return 0.0
 
 
-    def run_all(self, model_name, test_graphs):
-        # Convert test_graphs to a list to avoid unhashable type errors
-        test_graphs = list(test_graphs)  # Ensure it's a list
- 
-        # Initialize storage for results
-        results = {}
-        
-        for i, graph in enumerate(test_graphs):
-            try:
-                # Example of processing the graph
-                score = self.process_graph(model_name, graph)
-                if score is not None:
-                    # Store the score with graph identifier or index
-                    results[graph.contract_id] = score
-                    print(f"Processed graph {i} with contract ID: {graph.contract_id}, score: {score}")
-                else:
-                    print(f"No score returned for graph {i} with contract ID: {graph.contract_id}")
-            except Exception as e:
-                print(f"Error processing graph {i}: {str(e)}")
-        
-        return results
- 
-    def process_graph(self, model_name, graph):
-        try:
-            # Assuming 'model' is a pre-loaded model that corresponds to the model_name
-            model = self.load_model(model_name)  # Load the model dynamically
-            
-            # Prepare the graph for input into the model
-            graph_input = self.prepare_graph_input(graph)
-            
-            # Execute the model prediction
-            output_score = model.predict(graph_input)
- 
-            # Optionally, process the output score to a desired format
-            processed_score = self.process_output(output_score)
- 
-            return processed_score
-        
-        except Exception as e:
-            print(f"Error processing graph in model {model_name}: {str(e)}")
-            return None
- 
-    def load_model(self, model_name):
-        # Load the appropriate model based on the model_name
-        if model_name == 'model_a':
-            return ModelA()  # Replace with your model class
-        elif model_name == 'model_b':
-            return ModelB()  # Replace with your model class
-        else:
-            raise ValueError(f"Model {model_name} not recognized.")
- 
-    def prepare_graph_input(self, graph):
-        # Adjust this method according to your graph's structure and model requirements
-        # For instance: converting graph to tensor format
-        return torch_geometric.utils.to_networkx(graph)  # Example conversion
- 
-    def process_output(self, output):
-        # Process the output from the model (e.g., extracting a score)
-        if output is not None:
-            score = output.item()  # Assuming output is a single scalar tensor
-            return score
-        return None
+    # --- End of dummy block ---
 
 
     def run_detector(
