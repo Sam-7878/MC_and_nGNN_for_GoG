@@ -32,6 +32,7 @@ Once the Level 1 + Level 2 benchmark pipeline is perfectly stable, we will integ
 7. **No Duplicate Functions:** Review the whole file before adding a new helper method. When modifying a file, analyze the entire file first to ensure you are not creating duplicate functions or ignoring existing helper methods.
 8. **Memory Efficiency:** I am running this on a laptop with an 8GB GPU. Be aggressive about clearing unused variables (`del`, `torch.cuda.empty_cache()`), using proper `batch_size`, and leveraging `autocast` (Mixed Precision) where applicable.
 9. **Think Step-by-Step:** When fixing a bug, first state the root cause based on the traceback, then provide the precise file path and code snippet to fix it. Do not rewrite entire 500-line files; only provide the modified functions or blocks.
+10. **Simple is beautiful:** If possible, keep the line count in a single file under 500 lines; if it exceeds 400 lines, split the file and connect them via an interface to keep the code as concise as possible. Instead of cramming all implementations into a single file, consider the amount of code and organize the project structure more explicitly by separating it into a master/slave or parent/child structure. This involves dividing the code into a main body focused on core functionality—such as process operations and business logic—and utility or submodules.
 
 # Artifact & Documentation Rule (CRITICAL)
 I have a presentation in 2 days. For every major debugging phase or pipeline completion:
