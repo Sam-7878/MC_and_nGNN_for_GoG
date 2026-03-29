@@ -225,15 +225,22 @@ class Level2Model(nn.Module):
     Phase-3 Level 2 모델.
     - Level 1 embeddings로 구성된 relation graph를 입력으로 받음
     - GATv2 기반 relation 모델링
-    - graph-level embedding 및 fraud score 생성
+    - node-level (per-L1-graph) 및 graph-level embedding/fraud score 생성
     - 결과를 Level2Output으로 반환
+
+    Node-level 출력:
+        L2 graph의 각 노드 = L1 의 한 subgraph.
+        node_logits / node_scores = L2 relational context를 반영한
+        per-L1-graph anomaly score.
+    Graph-level 출력:
+        보조용. readout 후 graph-level prediction.
     """
 
     def __init__(self, cfg: Level2ModelConfig):
         super().__init__()
         self.cfg = cfg
 
-        # Added: Input normalization to stabilize Level 1 features especially on large Ethereum clusters
+        # Input normalization to stabilize Level 1 features
         self.input_norm = nn.LayerNorm(cfg.in_dim)
 
         _edge_dim = cfg.edge_dim if cfg.edge_dim > 0 else None
@@ -253,6 +260,16 @@ class Level2Model(nn.Module):
             readout_out_dim = cfg.hidden_dim * 2
 
         self.out_dim = readout_out_dim
+
+        # Node-level fraud head: applied per-node BEFORE readout
+        # Uses the GATv2 hidden_dim output directly
+        self.node_head = Level2FraudHead(
+            in_dim=cfg.hidden_dim,
+            hidden_dim=cfg.hidden_dim // 2,
+            out_dim=1,
+        )
+
+        # Graph-level fraud head: applied AFTER readout (auxiliary)
         self.head = Level2FraudHead(
             in_dim=readout_out_dim,
             hidden_dim=cfg.hidden_dim,
@@ -265,13 +282,7 @@ class Level2Model(nn.Module):
         return torch.zeros(batch.x.size(0), dtype=torch.long, device=batch.x.device)
 
     def _resolve_graph_id(self, batch, num_graphs: int) -> torch.Tensor:
-        """
-        Level 2에서 graph_id는 graph-level 식별자.
-        batch.graph_id는 node-level (Level 1 graph_id의 집합)이므로
-        graph-level index인 arange를 반환한다.
-        """
         return torch.arange(num_graphs, device=batch.x.device)
-
 
     def forward(self, batch) -> Level2Output:
         if not hasattr(batch, "x") or not hasattr(batch, "edge_index"):
@@ -293,34 +304,56 @@ class Level2Model(nn.Module):
         x = self.input_norm(x)
         x = torch.clamp(x, min=-10.0, max=10.0)
 
+        # GATv2 encoding: produces per-node representations
         node_repr = self.encoder(
             x=x,
             edge_index=batch.edge_index,
             edge_attr=edge_attr,
         )
-        graph_repr = self.readout(node_repr, batch_idx)
-        logits = self.head(graph_repr)
-        
-        # Stability: Clamp logits before sigmoid and handle NaNs
-        logits = torch.clamp(logits, min=-20.0, max=20.0)
-        score  = torch.sigmoid(logits)
-        
-        # Last resort: convert any residual NaNs to small finite values
-        score = torch.nan_to_num(score, nan=0.0, posinf=1.0, neginf=0.0)
 
-        label = getattr(batch, "y", None)
-        if label is not None:
-            label = label.view(-1, 1).float()
+        # ── Node-level output (primary for benchmark) ──
+        node_logits = self.node_head(node_repr)             # [N, 1]
+        node_logits = torch.clamp(node_logits, min=-20.0, max=20.0)
+        node_scores = torch.sigmoid(node_logits)
+        node_scores = torch.nan_to_num(node_scores, nan=0.0, posinf=1.0, neginf=0.0)
+
+        # ── Graph-level output (auxiliary) ──
+        graph_repr = self.readout(node_repr, batch_idx)
+        graph_logits = self.head(graph_repr)
+        graph_logits = torch.clamp(graph_logits, min=-20.0, max=20.0)
+        graph_score = torch.sigmoid(graph_logits)
+        graph_score = torch.nan_to_num(graph_score, nan=0.0, posinf=1.0, neginf=0.0)
+
+        # ── Resolve node-level labels ──
+        # batch.level1_label holds per-node labels (one per L1 graph = one per L2 node)
+        node_label = getattr(batch, "level1_label", None)
+        if node_label is None:
+            node_label = getattr(batch, "y", None)
+        if node_label is not None:
+            node_label = node_label.view(-1, 1).float()
+
+        # Graph-level label (auxiliary, for backwards compatibility)
+        graph_label = getattr(batch, "y", None)
+        if graph_label is not None:
+            graph_label = graph_label.view(-1, 1).float()
 
         return Level2Output(
             graph_id=self._resolve_graph_id(batch, num_graphs),
             embedding=graph_repr,
-            logits=logits,
-            score=score,
-            label=label,
+            logits=node_logits,          # PRIMARY: node-level logits
+            score=node_scores,           # PRIMARY: node-level scores
+            label=node_label,            # PRIMARY: node-level labels
             aux={
                 "num_graphs": num_graphs,
                 "out_dim": self.out_dim,
+                "node_embeddings": node_repr,
+                "node_logits": node_logits,
+                "node_scores": node_scores,
+                "node_label": node_label,
+                "graph_logits": graph_logits,
+                "graph_score": graph_score,
+                "graph_label": graph_label,
+                "graph_embedding": graph_repr,
             },
         )
 

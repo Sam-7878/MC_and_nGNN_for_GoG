@@ -277,13 +277,13 @@ class Level2Trainer:
 
             with autocast("cuda", enabled=self.use_amp):
                 out = self.model(batch)
+                # Node-level labels (per-L1-graph, from level1_label)
                 if out.label is None:
-                    raise ValueError(
-                        "Training batch must contain graph-level labels in batch.y"
-                    )
+                    log.warning("[Level2Trainer] Training batch has no node-level labels. Skipping.")
+                    continue
 
                 label = out.label.float().view_as(out.logits)
-                # Clamp logits for extreme stability on large clusters
+                # Node-level BCE loss (per-L1-graph supervision)
                 safe_logits = out.logits.clamp(min=-20.0, max=20.0)
                 loss = self.loss_fn(safe_logits, label)
                 scaled = loss / grad_accum_steps
@@ -357,18 +357,18 @@ class Level2Trainer:
             batch = self._move_batch(batch)
             out = self.model(batch)
 
+            # Node-level labels and scores (per-L1-graph)
             if out.label is None:
-                raise ValueError(
-                    "Evaluation batch must contain graph-level labels in batch.y"
-                )
+                log.warning("[Level2Trainer] Eval batch has no node-level labels. Skipping.")
+                continue
 
             label = out.label.float().view_as(out.logits)
-            # Stability: Clamp logits for evaluation matching training behavior
             safe_logits = out.logits.clamp(min=-20.0, max=20.0)
             loss = self.loss_fn(safe_logits, label)
             total_loss += float(loss.item())
             num_batches += 1
 
+            # Collect node-level (per-L1-graph) labels and scores
             all_y.append(label.detach().cpu())
             all_score.append(out.score.detach().cpu())
 
