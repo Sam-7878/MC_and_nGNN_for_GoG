@@ -309,10 +309,15 @@ def _build_l2_dynamic_loader_builder(l1_model, cfg):
             if not all_emb:
                 continue
 
+            # Numerical stability: clamp logits and scores
+            embs = torch.cat(all_emb, dim=0)
+            logits_cat = torch.cat(all_logits, dim=0).clamp(min=-10.0, max=10.0)
+            scores_cat = torch.cat(all_score, dim=0).clamp(min=1e-7, max=1.0 - 1e-7)
+
             bundle = {
-                "embedding": torch.cat(all_emb, dim=0),
-                "score": torch.cat(all_score, dim=0),
-                "logits": torch.cat(all_logits, dim=0),
+                "embedding": embs,
+                "score": scores_cat,
+                "logits": logits_cat,
                 "graph_id": torch.cat(all_id, dim=0),
             }
             if all_label:
@@ -605,7 +610,7 @@ def _extract_score_tensor(out) -> torch.Tensor:
     if not torch.is_tensor(score):
         score = torch.tensor(score, dtype=torch.float32)
 
-    return score.reshape(-1).detach().cpu()
+    return torch.nan_to_num(score.reshape(-1).detach().cpu(), nan=0.0, posinf=1.0, neginf=0.0)
 
 
 def _extract_scalar_score(out) -> float:

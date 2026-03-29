@@ -57,7 +57,8 @@ def _validate_bundle(bundle: Dict):
 
 
 def _normalize_embeddings(emb: torch.Tensor) -> torch.Tensor:
-    norm = emb.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-8)
+    # Use a slightly larger epsilon for numerical stability in cosine similarity
+    norm = emb.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-6)
     return emb / norm
 
 

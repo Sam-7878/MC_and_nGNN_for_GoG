@@ -283,7 +283,9 @@ class Level2Trainer:
                     )
 
                 label = out.label.float().view_as(out.logits)
-                loss = self.loss_fn(out.logits, label)
+                # Clamp logits for extreme stability on large clusters
+                safe_logits = out.logits.clamp(min=-20.0, max=20.0)
+                loss = self.loss_fn(safe_logits, label)
                 scaled = loss / grad_accum_steps
 
             self.scaler.scale(scaled).backward()
@@ -361,7 +363,9 @@ class Level2Trainer:
                 )
 
             label = out.label.float().view_as(out.logits)
-            loss = self.loss_fn(out.logits, label)
+            # Stability: Clamp logits for evaluation matching training behavior
+            safe_logits = out.logits.clamp(min=-20.0, max=20.0)
+            loss = self.loss_fn(safe_logits, label)
             total_loss += float(loss.item())
             num_batches += 1
 

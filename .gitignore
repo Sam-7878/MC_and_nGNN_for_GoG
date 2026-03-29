@@ -12,7 +12,8 @@ lightning_logs/
 
 # Graph database files
 doc/
-docs/
+docs/architecture/
+docs/work_reports/
 GoG/    
 result/
 results/
@@ -30,7 +31,6 @@ test_03/
 # Text files
 *.txt 
 *.log
-*.md
 *.png 
 
 # notes.

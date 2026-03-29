@@ -233,6 +233,9 @@ class Level2Model(nn.Module):
         super().__init__()
         self.cfg = cfg
 
+        # Added: Input normalization to stabilize Level 1 features especially on large Ethereum clusters
+        self.input_norm = nn.LayerNorm(cfg.in_dim)
+
         _edge_dim = cfg.edge_dim if cfg.edge_dim > 0 else None
 
         self.encoder = Level2GATEncoder(
@@ -275,20 +278,35 @@ class Level2Model(nn.Module):
             raise ValueError("Level2Model expects batch.x and batch.edge_index")
 
         batch_idx = self._resolve_batch_vector(batch)
-        num_graphs = int(batch_idx.max().item()) + 1 if batch_idx.numel() > 0 else 1
+        try:
+            num_graphs = i.item() if (i := batch_idx.max()).numel() > 0 else 0
+            num_graphs = num_graphs + 1 if batch_idx.numel() > 0 else 1
+        except Exception:
+            num_graphs = 1
 
         edge_attr = getattr(batch, "edge_attr", None)
         if edge_attr is not None and self.cfg.edge_dim == 0:
             edge_attr = None
 
+        # Stability: Normalize input features and clamp
+        x = batch.x.float()
+        x = self.input_norm(x)
+        x = torch.clamp(x, min=-10.0, max=10.0)
+
         node_repr = self.encoder(
-            x=batch.x.float(),
+            x=x,
             edge_index=batch.edge_index,
             edge_attr=edge_attr,
         )
         graph_repr = self.readout(node_repr, batch_idx)
         logits = self.head(graph_repr)
+        
+        # Stability: Clamp logits before sigmoid and handle NaNs
+        logits = torch.clamp(logits, min=-20.0, max=20.0)
         score  = torch.sigmoid(logits)
+        
+        # Last resort: convert any residual NaNs to small finite values
+        score = torch.nan_to_num(score, nan=0.0, posinf=1.0, neginf=0.0)
 
         label = getattr(batch, "y", None)
         if label is not None:
