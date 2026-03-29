@@ -78,6 +78,7 @@ MC 샘플링 시 Uncertainty가 0이 나오는 문제에 대한 원인과 해결
                          │
                          ▼
              [Final Fraud Prediction]
+```
 
 ## 4. 모듈별 상세 설계 원칙
 
@@ -130,3 +131,5 @@ MC_and_nGNN_for_GoG/
     │   └── extensions/        # MC 및 nGNN 플러그인 폴더
     ├── training/              # Level별 개별 Trainer 및 Joint Trainer
     └── pipelines/             # 실행 진입점 (train_level1.py, run_benchmark.py 등)
+
+```
