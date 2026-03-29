@@ -267,18 +267,20 @@ def _build_l2_dynamic_loader_builder(l1_model, cfg):
             random.shuffle(shuffled_ids)
             id_chunks = [shuffled_ids[i : i + chunk_size] for i in range(0, len(shuffled_ids), chunk_size)]
         else:
-            # STRATIFIED CHUNKING for Evaluation (to solve NaN metrics)
+            # INTERLEAVED CHUNKING for Evaluation (Better relational context than pure stratification)
             chunk_size = default_chunk
             pos_ids = [i for i in ids if label_dict.get(getattr(i, "contract_id", i), 0) == 1]
             neg_ids = [i for i in ids if label_dict.get(getattr(i, "contract_id", i), 0) == 0]
             
             id_chunks = []
-            # Chunks for positives
-            id_chunks += [pos_ids[i : i + chunk_size] for i in range(0, len(pos_ids), chunk_size)]
-            # Chunks for negatives (pure negatives ensure ROC-AUC defined)
-            # If we have very few negatives, make them smaller chunks to get n > 1
-            neg_chunk_size = min(chunk_size, max(2, len(neg_ids) // 2)) if len(neg_ids) > 1 else chunk_size
-            id_chunks += [neg_ids[i : i + neg_chunk_size] for i in range(0, len(neg_ids), neg_chunk_size)]
+            max_len = max(len(pos_ids), len(neg_ids))
+            interleaved = []
+            for i in range(max_len):
+                if i < len(pos_ids): interleaved.append(pos_ids[i])
+                if i < len(neg_ids): interleaved.append(neg_ids[i])
+            
+            # Now create chunks from interleaved list
+            id_chunks = [interleaved[i : i + chunk_size] for i in range(0, len(interleaved), chunk_size)]
 
         l2_graphs = []
         for chunk_ids in id_chunks:
@@ -314,11 +316,15 @@ def _build_l2_dynamic_loader_builder(l1_model, cfg):
             logits_cat = torch.cat(all_logits, dim=0).clamp(min=-10.0, max=10.0)
             scores_cat = torch.cat(all_score, dim=0).clamp(min=1e-7, max=1.0 - 1e-7)
 
+            # Record names/ids for tracking back to test set
+            chunk_contract_ids = [getattr(cid, "contract_id", str(cid)) for cid in chunk_ids]
+            
             bundle = {
                 "embedding": embs,
                 "score": scores_cat,
                 "logits": logits_cat,
                 "graph_id": torch.cat(all_id, dim=0),
+                "contract_id": chunk_contract_ids,
             }
             if all_label:
                 bundle["label"] = torch.cat(all_label, dim=0)
@@ -329,6 +335,7 @@ def _build_l2_dynamic_loader_builder(l1_model, cfg):
                 
             try:
                 l2_graph = build_level2_graph(bundle, rel_cfg)
+                l2_graph.contract_id = chunk_contract_ids
                 l2_graphs.append(l2_graph)
             except Exception as e:
                 log.error("[Dynamic L2 Builder] Failed to build L2 graph chunk: %s", e)
@@ -1072,42 +1079,45 @@ def main():
 
     table = BenchmarkTable()
 
-    log.info("")
-    log.info("=" * 50)
-    log.info("(A) Running Legacy Baselines …")
-
-    try:
-        run_legacy_baselines(dataset, cfg, table, setting)
-    except Exception:
-        log.exception("[Benchmark] Legacy baselines failed")
+    # =====================================================================
+    if cfg.get("run_legacy", True):
+        log.info("")
+        log.info("=" * 50)
+        log.info("(A) Running Legacy Baselines …")
+        try:
+            run_legacy_baselines(dataset, cfg, table, setting)
+        except Exception:
+            log.exception("[Benchmark] Legacy baselines failed")
 
     # =====================================================================
-    log.info("")
-    log.info("=" * 50)
-    log.info("(B) Running Revision Level1 …")
-
-    try:
-        run_revision_l1(dataset, cfg, table, setting)
-    except Exception:
-        log.exception("[Benchmark] Revision L1 failed")
+    if cfg.get("run_revision_l1", True):
+        log.info("")
+        log.info("=" * 50)
+        log.info("(B) Running Revision Level1 …")
+        try:
+            run_revision_l1(dataset, cfg, table, setting)
+        except Exception:
+            log.exception("[Benchmark] Revision L1 failed")
 
     # =====================================================================
-    log.info("")
-    log.info("=" * 50)
-    log.info("(C) Running Revision Level1 + Level2 …")
+    if cfg.get("run_revision_l1_l2", True):
+        log.info("")
+        log.info("=" * 50)
+        log.info("(C) Running Revision Level1 + Level2 …")
+        try:
+            run_revision_l1_l2(dataset, cfg, table, setting)
+        except Exception:
+            log.exception("[Benchmark] Revision L1+L2 failed")
 
-    try:
-        run_revision_l1_l2(dataset, cfg, table, setting)
-    except Exception:
-        log.exception("[Benchmark] Revision L1+L2 failed")
-
-    log.info("")
-    log.info("=" * 50)
-    log.info("(D) Running Revision Full …")
-    try:
-        run_revision_full(dataset, cfg, table, setting)
-    except Exception:
-        log.exception("[Benchmark] Revision Full failed")
+    # =====================================================================
+    if cfg.get("run_revision_full", True):
+        log.info("")
+        log.info("=" * 50)
+        log.info("(D) Running Revision Full …")
+        try:
+            run_revision_full(dataset, cfg, table, setting)
+        except Exception:
+            log.exception("[Benchmark] Revision Full failed")
 
     _best_effort_save_table(table, output_dir)
 

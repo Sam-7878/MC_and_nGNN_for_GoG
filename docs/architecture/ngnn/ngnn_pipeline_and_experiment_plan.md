@@ -1,9 +1,4 @@
 
----
-
-# 3) `ngnn_pipeline_and_experiment_plan.md`
-
-```markdown
 # nGNN Pipeline and Experiment Plan
 
 이 문서는 nGNN(Nested GNN)을 기존 benchmark 및 refactoring 파이프라인에
