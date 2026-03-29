@@ -563,6 +563,20 @@ class LegacyBatchRunner:
                 skipped += 1
                 continue
 
+            # ** SAFETY CHECK FOR OOM **
+            num_nodes = getattr(data, 'num_nodes', None)
+            if num_nodes is None and getattr(data, 'x', None) is not None:
+                num_nodes = data.x.size(0)
+            if num_nodes is not None and num_nodes > 2000:
+                logger.warning(
+                    "[LegacyRunner:%s] Skip %s: graph too large (num_nodes=%d) avoiding OOM",
+                    model_name,
+                    contract_id,
+                    num_nodes
+                )
+                skipped += 1
+                continue
+
             try:
                 detector = _build_detector(
                     model_name=model_name,
@@ -646,6 +660,12 @@ class LegacyBatchRunner:
                 int(scores.numel()),
                 float(graph_score),
             )
+
+            # Explicit memory cleanup
+            del detector
+            del scores
+            import gc
+            gc.collect()
 
         logger.info(
             "[LegacyRunner:%s] Done. Scored %d contracts. (skipped=%d)",
