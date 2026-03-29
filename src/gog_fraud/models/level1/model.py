@@ -67,6 +67,9 @@ class Level1ModelConfig:
     struct_dim: int = 0
     struct_hidden_dim: int = 64
     out_dim: int = 1
+    encoder_backend: str = "gnn" # "gnn" or "ngnn"
+    subgraph_pooling: str = "main_root"
+
 
     @classmethod
     def from_config(cls, cfg: Any) -> "Level1ModelConfig":
@@ -188,14 +191,31 @@ class Level1Model(nn.Module):
     def __init__(self, cfg: Level1ModelConfig):
         super().__init__()
         self.cfg = cfg
+        self.encoder_backend = getattr(cfg, "encoder_backend", "gnn").lower()
 
-        self.encoder = Level1GNNEncoder(
-            in_dim=cfg.in_dim,
-            hidden_dim=cfg.hidden_dim,
-            num_layers=cfg.num_layers,
-            dropout=cfg.dropout,
-        )
-        self.readout = GraphReadout(mode=cfg.readout)
+        if self.encoder_backend == "gnn":
+            self.encoder = Level1GNNEncoder(
+                in_dim=cfg.in_dim,
+                hidden_dim=cfg.hidden_dim,
+                num_layers=cfg.num_layers,
+                dropout=cfg.dropout,
+            )
+            self.readout = GraphReadout(mode=cfg.readout)
+        elif self.encoder_backend == "ngnn":
+            from src.gog_fraud.models.extensions.ngnn.level1_ngnn import Level1nGNN
+            self.encoder = Level1nGNN(
+                in_dim=cfg.in_dim,
+                hidden_dim=cfg.hidden_dim,
+                num_layers=cfg.num_layers,
+                num_classes=cfg.out_dim,
+                dropout=cfg.dropout,
+                subgraph_pooling=getattr(cfg, "subgraph_pooling", "main_root"),
+                nested_readout=cfg.readout.replace("meanmax", "mean") # simple translation
+            )
+            self.readout = None
+        else:
+            raise ValueError(f"Unknown encoder backend: {self.encoder_backend}")
+
 
         readout_dim = cfg.hidden_dim
         if cfg.readout == "meanmax":
@@ -256,8 +276,13 @@ class Level1Model(nn.Module):
         batch_idx = self._resolve_batch_vector(batch)
         num_graphs = int(batch_idx.max().item()) + 1 if batch_idx.numel() > 0 else 1
 
-        node_repr = self.encoder(batch.x, batch.edge_index)
-        graph_repr = self.readout(node_repr, batch_idx)
+        if self.encoder_backend == "gnn":
+            node_repr = self.encoder(batch.x, batch.edge_index)
+            graph_repr = self.readout(node_repr, batch_idx)
+        else:
+            # For nGNN, encoding and graph-level readout is done internally
+            graph_repr = self.encoder.extract_graph_embedding(batch)
+
 
         if self.struct_encoder is not None:
             struct_feat = self._extract_graph_struct_features(batch, num_graphs)
