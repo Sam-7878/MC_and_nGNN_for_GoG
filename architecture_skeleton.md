@@ -29,7 +29,7 @@ src/gog_fraud/
 
 ## 서브 문서 (Architecture Details)
 아래의 서브 문서를 참조하여 개별 소스의 구조와 인터페이스 정의를 파악할 수 있습니다.
-- [Level 1, 2 Plan for Decoupling and Architectural Refactoring](docs/architecture/level1_and_2/architectural_plan.md)
-- [Level 1 Architecture (docs/architecture/level1_architecture.md)](docs/architecture/level1_and_2/level1_architecture.md)
-- [Level 2 & Fusion Architecture (docs/architecture/level2_fusion_architecture.md)](docs/architecture/level1_and_2/level2_fusion_architecture.md)
-- [Data & Pipeline Architecture (docs/architecture/pipeline_and_data.md)](docs/architecture/level1_and_2/pipeline_and_data.md)
+- [Level 1, 2 Plan for Decoupling and Architectural Refactoring (docs/architecture/level1_and_2/architectural_plan.md)](docs/architecture/level1_and_2/architectural_plan.md)
+- [Level 1 Architecture (docs/architecture/level1_and_2/level1_architecture.md)](docs/architecture/level1_and_2/level1_architecture.md)
+- [Level 2 & Fusion Architecture (docs/architecture/level1_and_2/level2_fusion_architecture.md)](docs/architecture/level1_and_2/level2_fusion_architecture.md)
+- [Data & Pipeline Architecture (docs/architecture/level1_and_2/pipeline_and_data.md)](docs/architecture/level1_and_2/pipeline_and_data.md)
