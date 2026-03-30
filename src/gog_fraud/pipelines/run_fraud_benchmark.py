@@ -986,11 +986,39 @@ def _best_effort_save_table(table, out_dir: Path) -> None:
             serializable.append(str(row))
 
     out_path = out_dir / "benchmark_results.json"
-    with open(out_path, "w", encoding="utf-8") as f:
-        import json
-        json.dump(serializable, f, ensure_ascii=False, indent=2)
+    existing_data = []
 
-    log.info(f"[Benchmark] Saved fallback JSON to {out_path}")
+    # [NEW] UPSERT LOGIC
+    import json
+    if out_path.exists():
+        try:
+            with open(out_path, "r", encoding="utf-8") as f:
+                existing_data = json.load(f)
+        except Exception as e:
+            log.warning(f"[Benchmark] Failed to load previous JSON for merging: {e}")
+
+    for new_row in serializable:
+        if not isinstance(new_row, dict):
+            existing_data.append(new_row)
+            continue
+        
+        m_name = new_row.get("model_name")
+        m_set = new_row.get("setting")
+        replaced = False
+        
+        for i, old_row in enumerate(existing_data):
+            if isinstance(old_row, dict) and old_row.get("model_name") == m_name and old_row.get("setting") == m_set:
+                existing_data[i] = new_row
+                replaced = True
+                break
+        
+        if not replaced:
+            existing_data.append(new_row)
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(existing_data, f, ensure_ascii=False, indent=2)
+
+    log.info(f"[Benchmark] Saved merged JSON to {out_path}")
 
 
 
@@ -1042,7 +1070,12 @@ def main():
     parser.add_argument("--config", required=True, type=str)
     parser.add_argument("--output", required=False, type=str, default=None)
     parser.add_argument("--smoke", required=False, type=bool, default=True)
+    parser.add_argument("--stages", required=False, type=str, default="legacy,l1,l1_l2,full", 
+                        help="Comma-separated stages to run: legacy, l1, l1_l2, full")
     args = parser.parse_args()
+
+    active_stages = [s.strip().lower() for s in args.stages.split(",") if s.strip()]
+
 
     cfg = _load_config(args.config)
     setting = str(_cfg_get(cfg, "setting", "strict"))
@@ -1080,45 +1113,136 @@ def main():
     table = BenchmarkTable()
 
     # =====================================================================
-    if cfg.get("run_legacy", True):
+    if "legacy" in active_stages and cfg.get("run_legacy", True):
         log.info("")
         log.info("=" * 50)
         log.info("(A) Running Legacy Baselines …")
         try:
             run_legacy_baselines(dataset, cfg, table, setting)
+            _best_effort_save_table(table, output_dir)
         except Exception:
             log.exception("[Benchmark] Legacy baselines failed")
 
     # =====================================================================
-    if cfg.get("run_revision_l1", True):
+    l1_cache_path = output_dir / "l1_model_weights.pt"
+    l1_model = None
+
+    if "l1" in active_stages and cfg.get("run_revision_l1", True):
         log.info("")
         log.info("=" * 50)
         log.info("(B) Running Revision Level1 …")
         try:
-            run_revision_l1(dataset, cfg, table, setting)
+            # We explicitly need the trainer to get the trained model weight to cache
+            from gog_fraud.pipelines.run_fraud_benchmark import _build_level1_trainer, _call_level1_trainer_fit, _get_split_graphs
+            train_g, valid_g, test_g = _get_split_graphs(dataset, cfg, setting)
+            trainer = _build_level1_trainer(cfg)
+            _call_level1_trainer_fit(trainer, train_g, valid_g, dataset.labels, cfg)
+            
+            l1_model = trainer.model
+            torch.save(l1_model.state_dict(), l1_cache_path)
+            log.info(f"[Benchmark] Cached Level1 model state to {l1_cache_path}")
+
+            # Inline evaluation metrics hook
+            from gog_fraud.evaluation.benchmark import evaluate_benchmark
+            backend = cfg.get("level1", {}).get("encoder_backend", "gnn").upper()
+            m_name = f"Revision-L1-{backend}" if backend != "GNN" else "Revision-L1"
+            
+            metrics, yt, ys = trainer.evaluate(test_g, label_dict=dataset.labels, return_preds=True)
+            res = evaluate_benchmark(y_true=yt, y_score=ys, model_name=m_name, setting=setting)
+            table.add(res)
+            _best_effort_save_table(table, output_dir)
+
         except Exception:
             log.exception("[Benchmark] Revision L1 failed")
+    
+    # Load cached L1 model if we skipped L1 but need it for L2/Full
+    if ("l1_l2" in active_stages or "full" in active_stages) and l1_model is None:
+        log.info(f"[Benchmark] Loading cached L1 model from {l1_cache_path} for L2 dependencies")
+        try:
+            from gog_fraud.pipelines.run_fraud_benchmark import _build_level1_trainer
+            dummy_trainer = _build_level1_trainer(cfg)
+            dummy_trainer.model.load_state_dict(torch.load(l1_cache_path, map_location="cpu"))
+            l1_model = dummy_trainer.model
+        except Exception as e:
+            log.error(f"[Benchmark] Failed to load L1 cache! Level 2 pipeline will fail. Run --stages l1 first. {e}")
 
     # =====================================================================
-    if cfg.get("run_revision_l1_l2", True):
+    if "l1_l2" in active_stages and cfg.get("run_revision_l1_l2", True):
         log.info("")
         log.info("=" * 50)
         log.info("(C) Running Revision Level1 + Level2 …")
         try:
-            run_revision_l1_l2(dataset, cfg, table, setting)
+            from gog_fraud.pipelines.run_fraud_benchmark import _get_split_graphs, _build_level2_trainer, _call_level2_trainer_fit, _build_l2_dynamic_loader_builder, evaluate_benchmark
+            train_g, valid_g, test_g = _get_split_graphs(dataset, cfg, setting)
+            l2_trainer = _build_level2_trainer(cfg, l1_model)
+
+            _call_level2_trainer_fit(
+                trainer=l2_trainer,
+                l1_model=l1_model,
+                cfg=cfg,
+                train_ids=train_g,
+                valid_ids=valid_g,
+                labels=dataset.labels,
+                global_graph=dataset.global_graph,
+                loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg)
+            )
+
+            metrics, yt, ys = l2_trainer.evaluate(
+                test_g,
+                label_dict=dataset.labels,
+                global_graph=dataset.global_graph,
+                loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg),
+                return_preds=True
+            )
+            backend = cfg.get("level1", {}).get("encoder_backend", "gnn").upper()
+            m_name = f"Revision-L1+L2-{backend}" if backend != "GNN" else "Revision-L1+L2"
+
+            res = evaluate_benchmark(y_true=yt, y_score=ys, model_name=m_name, setting=setting)
+            table.add(res)
+            _best_effort_save_table(table, output_dir)
+
         except Exception:
             log.exception("[Benchmark] Revision L1+L2 failed")
 
     # =====================================================================
-    if cfg.get("run_revision_full", True):
+    if "full" in active_stages and cfg.get("run_revision_full", True):
         log.info("")
         log.info("=" * 50)
         log.info("(D) Running Revision Full …")
         try:
-            run_revision_full(dataset, cfg, table, setting)
+            from gog_fraud.pipelines.run_fraud_benchmark import _get_split_graphs, _build_level2_trainer, _call_level2_trainer_fit, _build_l2_dynamic_loader_builder, evaluate_benchmark
+            train_g, valid_g, test_g = _get_split_graphs(dataset, cfg, setting)
+            l2_trainer = _build_level2_trainer(cfg, l1_model)
+
+            _call_level2_trainer_fit(
+                trainer=l2_trainer,
+                l1_model=l1_model,
+                cfg=cfg,
+                train_ids=train_g,
+                valid_ids=valid_g,
+                labels=dataset.labels,
+                global_graph=dataset.global_graph,
+                loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg)
+            )
+
+            metrics, yt, ys = l2_trainer.evaluate(
+                test_g,
+                label_dict=dataset.labels,
+                global_graph=dataset.global_graph,
+                loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg),
+                return_preds=True
+            )
+            backend = cfg.get("level1", {}).get("encoder_backend", "gnn").upper()
+            m_name = f"Revision-Full-{backend}" if backend != "GNN" else "Revision-Full"
+
+            res = evaluate_benchmark(y_true=yt, y_score=ys, model_name=m_name, setting=setting)
+            table.add(res)
+            _best_effort_save_table(table, output_dir)
+            
         except Exception:
             log.exception("[Benchmark] Revision Full failed")
 
+    # One final implicit serialization catch-all
     _best_effort_save_table(table, output_dir)
 
 

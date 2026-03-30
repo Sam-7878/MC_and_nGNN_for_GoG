@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch_geometric.data import Batch
 from torch_geometric.nn import SAGEConv, GCNConv, GATv2Conv, global_mean_pool, global_max_pool, global_add_pool
 
-from src.gog_fraud.models.extensions.ngnn.interfaces import NestedEncoder
+from gog_fraud.models.extensions.ngnn.interfaces import NestedEncoder
 
 class StandardNestedEncoder(NestedEncoder):
     """

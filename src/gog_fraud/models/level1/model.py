@@ -12,6 +12,7 @@ from typing import Any, Mapping
 import inspect
 
 from gog_fraud.common.types import Level1Output
+from gog_fraud.models.extensions.ngnn.level1_ngnn import Level1nGNN
 
 
 def _cfg_to_plain_dict(cfg: Any) -> dict:
@@ -202,7 +203,6 @@ class Level1Model(nn.Module):
             )
             self.readout = GraphReadout(mode=cfg.readout)
         elif self.encoder_backend == "ngnn":
-            from src.gog_fraud.models.extensions.ngnn.level1_ngnn import Level1nGNN
             self.encoder = Level1nGNN(
                 in_dim=cfg.in_dim,
                 hidden_dim=cfg.hidden_dim,

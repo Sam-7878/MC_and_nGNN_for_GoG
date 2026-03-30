@@ -3,9 +3,9 @@
 import torch
 import torch.nn as nn
 
-from src.gog_fraud.models.level1.level1_gnn import MLPHead, _cfg_get, _nested_get
-from src.gog_fraud.models.extensions.ngnn.nested_encoder import StandardNestedEncoder
-from src.gog_fraud.models.extensions.ngnn.readout import StandardNestedReadout
+from gog_fraud.models.level1.level1_gnn import MLPHead, _cfg_get, _nested_get
+from gog_fraud.models.extensions.ngnn.nested_encoder import StandardNestedEncoder
+from gog_fraud.models.extensions.ngnn.readout import StandardNestedReadout
 
 class Level1nGNN(nn.Module):
     """

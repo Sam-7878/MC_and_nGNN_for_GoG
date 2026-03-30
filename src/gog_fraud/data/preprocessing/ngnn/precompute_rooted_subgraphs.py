@@ -8,8 +8,8 @@ from pathlib import Path
 from tqdm import tqdm
 from typing import Dict, Any, Optional
 
-from src.gog_fraud.data.preprocessing.ngnn.subgraph_extraction import extract_rooted_subgraphs
-from src.gog_fraud.data.preprocessing.ngnn.serialization import save_rooted_subgraphs, write_manifest
+from gog_fraud.data.preprocessing.ngnn.subgraph_extraction import extract_rooted_subgraphs
+from gog_fraud.data.preprocessing.ngnn.serialization import save_rooted_subgraphs, write_manifest
 
 def run_precompute(
     dataset, # the original Level 1 dataset

@@ -3,7 +3,7 @@
 import torch
 from torch_geometric.data import Data
 from torch_geometric.transforms import BaseTransform
-from src.gog_fraud.data.preprocessing.ngnn.subgraph_extraction import extract_rooted_subgraphs
+from gog_fraud.data.preprocessing.ngnn.subgraph_extraction import extract_rooted_subgraphs
 
 class nGNNOnlineTransform(BaseTransform):
     """

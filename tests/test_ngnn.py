@@ -1,8 +1,8 @@
 import os
 import torch
 from torch_geometric.data import Data, Batch
-from src.gog_fraud.models.level1.model import Level1ModelConfig, Level1Model
-from src.gog_fraud.data.transforms.ngnn_online_transform import nGNNOnlineTransform
+from gog_fraud.models.level1.model import Level1ModelConfig, Level1Model
+from gog_fraud.data.transforms.ngnn_online_transform import nGNNOnlineTransform
 
 def test_ngnn_module():
     print("=== Testing Subgraph Extraction & Transformation ===")
