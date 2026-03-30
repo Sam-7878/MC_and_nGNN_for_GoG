@@ -83,9 +83,15 @@ def _unwrap_to_data_list(items: Any, label_dict: Optional[dict] = None) -> List[
     for x in seq:
         data = _to_pyg_data(x)
         if data is not None:
-            if label_dict is not None and hasattr(x, "contract_id") and x.contract_id in label_dict:
-                import torch
-                data.y = torch.tensor([label_dict[x.contract_id]], dtype=torch.float32)
+            if label_dict is not None:
+                # Robust extraction of contract_id and normalization
+                cid = str(getattr(x, "contract_id", "")).strip().lower()
+                if cid and cid in label_dict:
+                    data.y = torch.tensor([label_dict[cid]], dtype=torch.float32)
+                elif hasattr(x, "contract_id") and x.contract_id in label_dict:
+                    # Fallback for original case if needed
+                    data.y = torch.tensor([label_dict[x.contract_id]], dtype=torch.float32)
+
             out.append(data)
         else:
             skipped += 1

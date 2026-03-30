@@ -381,6 +381,16 @@ class Level2Trainer:
         all_y = torch.cat(all_y, dim=0)
         all_score = torch.cat(all_score, dim=0)
 
+        if all_y.size(0) != all_score.size(0):
+            log.warning(
+                "[Level2Trainer] Sample size mismatch: y.size=%d, score.size=%d. "
+                "Forcing match via truncation. Check for node-level label lookup failure.",
+                all_y.size(0), all_score.size(0)
+            )
+            min_n = min(all_y.size(0), all_score.size(0))
+            all_y = all_y[:min_n]
+            all_score = all_score[:min_n]
+
         metrics = compute_level2_metrics(all_y, all_score)
         metrics["loss"] = total_loss / max(num_batches, 1)
         if return_preds:

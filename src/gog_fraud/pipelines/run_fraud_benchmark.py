@@ -269,8 +269,15 @@ def _build_l2_dynamic_loader_builder(l1_model, cfg):
         else:
             # INTERLEAVED CHUNKING for Evaluation (Better relational context than pure stratification)
             chunk_size = default_chunk
-            pos_ids = [i for i in ids if label_dict.get(getattr(i, "contract_id", i), 0) == 1]
-            neg_ids = [i for i in ids if label_dict.get(getattr(i, "contract_id", i), 0) == 0]
+            
+            # Robust label lookup for splitting
+            def _get_label(item):
+                if label_dict is None: return 0
+                cid = str(getattr(item, "contract_id", item)).strip().lower()
+                return label_dict.get(cid, label_dict.get(getattr(item, "contract_id", item), 0))
+
+            pos_ids = [i for i in ids if _get_label(i) == 1]
+            neg_ids = [i for i in ids if _get_label(i) == 0]
             
             id_chunks = []
             max_len = max(len(pos_ids), len(neg_ids))
@@ -947,7 +954,7 @@ def run_revision_full(dataset, cfg, table, setting):
 # ---------------------------------------------------------------------------
 # save helper
 # ---------------------------------------------------------------------------
-def _best_effort_save_table(table, out_dir: Path) -> None:
+def _best_effort_save_table(table, out_dir: Path, chain: str = "polygon") -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for method_name in ["save", "dump", "write"]:
@@ -989,7 +996,7 @@ def _best_effort_save_table(table, out_dir: Path) -> None:
         else:
             serializable.append(str(row))
 
-    out_path = out_dir / "benchmark_results.json"
+    out_path = out_dir / f"benchmark_results_{chain}.json"
     existing_data = []
 
     # [NEW] UPSERT LOGIC
@@ -1095,6 +1102,7 @@ def main():
 
     dataset_cfg = _cfg_get(cfg, "dataset", {}) or {}
     dataset = _build_dataset_from_cfg(cfg)
+    chain = dataset_cfg.get("chain", 'polygon')
 
     # =====================================================================
     # [추가된 코드] 데이터셋으로부터 실제 in_dim(피처 차원) 동적 추론 및 할당
@@ -1133,7 +1141,7 @@ def main():
         log.info("(A) Running Legacy Baselines …")
         try:
             run_legacy_baselines(dataset, cfg, table, setting)
-            _best_effort_save_table(table, output_dir)
+            _best_effort_save_table(table, output_dir, chain=chain)
         except Exception:
             log.exception("[Benchmark] Legacy baselines failed")
 
@@ -1164,7 +1172,7 @@ def main():
             metrics, yt, ys = trainer.evaluate(test_g, label_dict=dataset.labels, return_preds=True)
             res = evaluate_benchmark(y_true=yt, y_score=ys, model_name=m_name, setting=setting)
             table.add(res)
-            _best_effort_save_table(table, output_dir)
+            _best_effort_save_table(table, output_dir, chain=chain)
 
         except Exception:
             log.exception("[Benchmark] Revision L1 failed")
@@ -1217,7 +1225,7 @@ def main():
 
                 res = evaluate_benchmark(y_true=yt, y_score=ys, model_name=m_name, setting=setting)
                 table.add(res)
-                _best_effort_save_table(table, output_dir)
+                _best_effort_save_table(table, output_dir, chain=chain)
 
             except Exception:
                 log.exception("[Benchmark] Revision L1+L2 failed")
@@ -1259,13 +1267,13 @@ def main():
 
                 res = evaluate_benchmark(y_true=yt, y_score=ys, model_name=m_name, setting=setting)
                 table.add(res)
-                _best_effort_save_table(table, output_dir)
+                _best_effort_save_table(table, output_dir, chain=chain)
 
             except Exception:
                 log.exception("[Benchmark] Revision Full failed")
 
     # One final implicit serialization catch-all
-    _best_effort_save_table(table, output_dir)
+    _best_effort_save_table(table, output_dir, chain=chain)
 
 
 if __name__ == "__main__":

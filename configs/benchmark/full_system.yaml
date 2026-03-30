@@ -14,7 +14,7 @@ dataset:
   transactions_root : "../_data/dataset/transactions"
   labels_path       : "../_data/dataset/labels.csv"
   global_graph_root : "../_data/dataset/global_graph"
-  chain             : "polygon"
+  chain             : "ethereum"
 
   auto_split        : true
   train_ratio       : 0.70

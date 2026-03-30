@@ -367,8 +367,12 @@ class Level2Model(nn.Module):
         node_label = getattr(batch, "level1_label", None)
         if node_label is None:
             node_label = getattr(batch, "y", None)
+        
         if node_label is not None:
             node_label = node_label.view(-1, 1).float()
+            # Defensive expansion: if node_label is graph-level (size 1) but we have N nodes, expand it
+            if node_label.size(0) == 1 and node_logits.size(0) > 1:
+                node_label = node_label.expand(node_logits.size(0), 1)
 
         # Graph-level label (auxiliary, for backwards compatibility)
         graph_label = getattr(batch, "y", None)
