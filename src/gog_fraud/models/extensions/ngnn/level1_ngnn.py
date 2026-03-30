@@ -124,24 +124,37 @@ class Level1nGNN(nn.Module):
         # For each global subgraph idx, what is the parent?
         # A simple array is sufficient, since we know num_total_subgraphs 
         total_subgraphs = offsets[-1] + max_sub_per_parent[-1]
-        subgraph_to_parent = torch.zeros(total_subgraphs, dtype=torch.long, device=device)
         
-        # fill subgraph_to_parent
-        # nodes to their global subgraphs: global_subgraph_idx
-        # nodes to their parent: node_to_parent
+        # Debug
+        if node_to_parent.max() > 1000 or total_subgraphs > 100000:
+            print(f"[DEBUG Resolve] node_to_parent min/max: {node_to_parent.min().item()}/{node_to_parent.max().item()}")
+            print(f"[DEBUG Resolve] node_to_local_subgraph max: {node_to_local_subgraph.max().item()}")
+            print(f"[DEBUG Resolve] offsets max: {offsets.max().item()}")
+            print(f"[DEBUG Resolve] total_subgraphs: {total_subgraphs}")
+
+        subgraph_to_parent = torch.zeros(total_subgraphs, dtype=torch.long, device=device)
         subgraph_to_parent.scatter_(0, global_subgraph_idx, node_to_parent)
         
         return global_subgraph_idx, subgraph_to_parent, node_to_parent
 
     def encode_graph(self, data) -> torch.Tensor:
-        global_subgraph_idx, subgraph_to_parent, _ = self._resolve_batch_indices(data)
+        global_subgraph_idx, subgraph_to_parent, node_to_parent = self._resolve_batch_indices(data)
         
+        # Debug
+        if node_to_parent.max() > 1000:
+             print(f"[DEBUG Encode] subgraph_to_parent min/max: {subgraph_to_parent.min().item()}/{subgraph_to_parent.max().item()}")
+
         # Because nested_encoder currently expects data.batch to be node -> subgraph mapping:
         orig_batch = getattr(data, 'batch', None)
         data.batch = global_subgraph_idx
         
         subgraph_embs = self.nested_encoder(data)
         
+        # Debug
+        if node_to_parent.max() > 1000:
+            print(f"[DEBUG Encode] subgraph_embs shape: {subgraph_embs.shape}")
+            print(f"[DEBUG Encode] subgraph_to_parent length: {len(subgraph_to_parent)}")
+
         # Restore orig_batch 
         data.batch = orig_batch
 
