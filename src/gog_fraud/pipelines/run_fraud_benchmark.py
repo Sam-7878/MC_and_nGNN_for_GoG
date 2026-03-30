@@ -293,6 +293,10 @@ def _build_l2_dynamic_loader_builder(l1_model, cfg):
                 log.warning("[Dynamic L2 Builder] Failed to prepare L1 loader for chunk: %s", e)
                 continue
 
+            if l1_model is None:
+                log.error("[Dynamic L2 Builder] l1_model is None. Cannot build Level 2 graph without Level 1 embeddings.")
+                return None
+
             l1_model.eval()
             device = next(l1_model.parameters()).device
             
@@ -1107,7 +1111,17 @@ def main():
     # 추론된 in_dim을 cfg(환경 설정)에 강제 덮어쓰기
     if "level1" not in cfg:
         cfg["level1"] = {}
-    cfg["level1"]["in_dim"] = in_dim
+    
+    # Priority: Dataset Inferred > Config in_dim
+    final_in_dim = in_dim if in_dim != 32 else cfg["level1"].get("in_dim", 32)
+    cfg["level1"]["in_dim"] = final_in_dim
+    
+    log.info(f"[Benchmark] Final Level1 Input Dimension: {final_in_dim}")
+    
+    # Verify Level1 config
+    from gog_fraud.models.level1.model import Level1ModelConfig
+    l1_verify_cfg = Level1ModelConfig.from_config(cfg.get("level1", {}))
+    log.info(f"[Benchmark] Resolved Level1 Config: {l1_verify_cfg}")
     # =====================================================================
 
     table = BenchmarkTable()
@@ -1171,76 +1185,84 @@ def main():
         log.info("")
         log.info("=" * 50)
         log.info("(C) Running Revision Level1 + Level2 …")
-        try:
-            from gog_fraud.pipelines.run_fraud_benchmark import _get_split_graphs, _build_level2_trainer, _call_level2_trainer_fit, _build_l2_dynamic_loader_builder, evaluate_benchmark
-            train_g, valid_g, test_g = _get_split_graphs(dataset, cfg, setting)
-            l2_trainer = _build_level2_trainer(cfg, l1_model)
 
-            _call_level2_trainer_fit(
-                trainer=l2_trainer,
-                l1_model=l1_model,
-                cfg=cfg,
-                train_ids=train_g,
-                valid_ids=valid_g,
-                labels=dataset.labels,
-                global_graph=dataset.global_graph,
-                loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg)
-            )
+        if l1_model is None:
+            log.warning("[Benchmark] Skipping Revision L1+L2 because Level1 model is missing (L1 stage failed or cache load failed).")
+        else:
+            try:
+                from gog_fraud.pipelines.run_fraud_benchmark import _get_split_graphs, _build_level2_trainer, _call_level2_trainer_fit, _build_l2_dynamic_loader_builder, evaluate_benchmark
+                train_g, valid_g, test_g = _get_split_graphs(dataset, cfg, setting)
+                l2_trainer = _build_level2_trainer(cfg, l1_model)
 
-            metrics, yt, ys = l2_trainer.evaluate(
-                test_g,
-                label_dict=dataset.labels,
-                global_graph=dataset.global_graph,
-                loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg),
-                return_preds=True
-            )
-            backend = cfg.get("level1", {}).get("encoder_backend", "gnn").upper()
-            m_name = f"Revision-L1+L2-{backend}" if backend != "GNN" else "Revision-L1+L2"
+                _call_level2_trainer_fit(
+                    trainer=l2_trainer,
+                    l1_model=l1_model,
+                    cfg=cfg,
+                    train_ids=train_g,
+                    valid_ids=valid_g,
+                    labels=dataset.labels,
+                    global_graph=dataset.global_graph,
+                    loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg)
+                )
 
-            res = evaluate_benchmark(y_true=yt, y_score=ys, model_name=m_name, setting=setting)
-            table.add(res)
-            _best_effort_save_table(table, output_dir)
+                metrics, yt, ys = l2_trainer.evaluate(
+                    test_g,
+                    label_dict=dataset.labels,
+                    global_graph=dataset.global_graph,
+                    loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg),
+                    return_preds=True
+                )
+                backend = cfg.get("level1", {}).get("encoder_backend", "gnn").upper()
+                m_name = f"Revision-L1+L2-{backend}" if backend != "GNN" else "Revision-L1+L2"
 
-        except Exception:
-            log.exception("[Benchmark] Revision L1+L2 failed")
+                res = evaluate_benchmark(y_true=yt, y_score=ys, model_name=m_name, setting=setting)
+                table.add(res)
+                _best_effort_save_table(table, output_dir)
+
+            except Exception:
+                log.exception("[Benchmark] Revision L1+L2 failed")
 
     # =====================================================================
     if "full" in active_stages and cfg.get("run_revision_full", True):
         log.info("")
         log.info("=" * 50)
         log.info("(D) Running Revision Full …")
-        try:
-            from gog_fraud.pipelines.run_fraud_benchmark import _get_split_graphs, _build_level2_trainer, _call_level2_trainer_fit, _build_l2_dynamic_loader_builder, evaluate_benchmark
-            train_g, valid_g, test_g = _get_split_graphs(dataset, cfg, setting)
-            l2_trainer = _build_level2_trainer(cfg, l1_model)
 
-            _call_level2_trainer_fit(
-                trainer=l2_trainer,
-                l1_model=l1_model,
-                cfg=cfg,
-                train_ids=train_g,
-                valid_ids=valid_g,
-                labels=dataset.labels,
-                global_graph=dataset.global_graph,
-                loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg)
-            )
+        if l1_model is None:
+            log.warning("[Benchmark] Skipping Revision Full because Level1 model is missing.")
+        else:
+            try:
+                from gog_fraud.pipelines.run_fraud_benchmark import _get_split_graphs, _build_level2_trainer, _call_level2_trainer_fit, _build_l2_dynamic_loader_builder, evaluate_benchmark
+                train_g, valid_g, test_g = _get_split_graphs(dataset, cfg, setting)
+                l2_trainer = _build_level2_trainer(cfg, l1_model)
 
-            metrics, yt, ys = l2_trainer.evaluate(
-                test_g,
-                label_dict=dataset.labels,
-                global_graph=dataset.global_graph,
-                loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg),
-                return_preds=True
-            )
-            backend = cfg.get("level1", {}).get("encoder_backend", "gnn").upper()
-            m_name = f"Revision-Full-{backend}" if backend != "GNN" else "Revision-Full"
+                _call_level2_trainer_fit(
+                    trainer=l2_trainer,
+                    l1_model=l1_model,
+                    cfg=cfg,
+                    train_ids=train_g,
+                    valid_ids=valid_g,
+                    labels=dataset.labels,
+                    global_graph=dataset.global_graph,
+                    loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg)
+                )
 
-            res = evaluate_benchmark(y_true=yt, y_score=ys, model_name=m_name, setting=setting)
-            table.add(res)
-            _best_effort_save_table(table, output_dir)
-            
-        except Exception:
-            log.exception("[Benchmark] Revision Full failed")
+                metrics, yt, ys = l2_trainer.evaluate(
+                    test_g,
+                    label_dict=dataset.labels,
+                    global_graph=dataset.global_graph,
+                    loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg),
+                    return_preds=True
+                )
+                backend = cfg.get("level1", {}).get("encoder_backend", "gnn").upper()
+                m_name = f"Revision-Full-{backend}" if backend != "GNN" else "Revision-Full"
+
+                res = evaluate_benchmark(y_true=yt, y_score=ys, model_name=m_name, setting=setting)
+                table.add(res)
+                _best_effort_save_table(table, output_dir)
+
+            except Exception:
+                log.exception("[Benchmark] Revision Full failed")
 
     # One final implicit serialization catch-all
     _best_effort_save_table(table, output_dir)

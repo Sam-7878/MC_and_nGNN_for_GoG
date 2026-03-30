@@ -84,39 +84,53 @@ class Level1ModelConfig:
         # ---------------------------------------------------------
         
         # 0. in_dim aliases
-        for k in ["in_dim", "input_dim", "num_node_features", "node_feat_dim"]:
-            if k in data and k != "in_dim":
-                data["in_dim"] = data.pop(k)
+        for k in ["input_dim", "num_node_features", "node_feat_dim"]:
+            if k in data:
+                val = data.pop(k)
+                if "in_dim" not in data:
+                    data["in_dim"] = val
 
         # 1. hidden_dim aliases
-        for k in ["hidden_dim", "hid_dim", "embed_dim", "hidden_channels"]:
-            if k in data and k != "hidden_dim":
-                data["hidden_dim"] = data.pop(k)
+        for k in ["hid_dim", "embed_dim", "hidden_channels"]:
+            if k in data:
+                val = data.pop(k)
+                if "hidden_dim" not in data:
+                    data["hidden_dim"] = val
 
         # 2. num_layers aliases
-        for k in ["num_layers", "num_layer", "gnn_layers"]:
-            if k in data and k != "num_layers":
-                data["num_layers"] = data.pop(k)
+        for k in ["num_layer", "gnn_layers"]:
+            if k in data:
+                val = data.pop(k)
+                if "num_layers" not in data:
+                    data["num_layers"] = val
 
         # 3. readout/pooling aliases
-        for k in ["readout", "pooling"]:
-            if k in data and k != "readout":
-                data["readout"] = data.pop(k)
+        for k in ["pooling"]:
+            if k in data:
+                val = data.pop(k)
+                if "readout" not in data:
+                    data["readout"] = val
 
         # 4. dropout aliases
-        for k in ["dropout", "dropout_p"]:
-            if k in data and k != "dropout":
-                data["dropout"] = data.pop(k)
+        for k in ["dropout_p"]:
+            if k in data:
+                val = data.pop(k)
+                if "dropout" not in data:
+                    data["dropout"] = val
 
         # 5. encoder_backend aliases
-        for k in ["encoder_backend", "backbone"]:
-            if k in data and k != "encoder_backend":
-                data["encoder_backend"] = data.pop(k)
+        for k in ["backbone"]:
+            if k in data:
+                val = data.pop(k)
+                if "encoder_backend" not in data:
+                    data["encoder_backend"] = val
 
         # 6. out_dim aliases
-        for k in ["out_dim", "num_classes"]:
-            if k in data and k != "out_dim":
-                data["out_dim"] = data.pop(k)
+        for k in ["num_classes"]:
+            if k in data:
+                val = data.pop(k)
+                if "out_dim" not in data:
+                    data["out_dim"] = val
 
         valid = {f.name for f in fields(cls)}
         filtered = {k: v for k, v in data.items() if k in valid}

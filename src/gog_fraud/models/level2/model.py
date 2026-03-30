@@ -94,13 +94,51 @@ class Level2ModelConfig:
 
         data = _cfg_to_plain_dict(cfg)
 
-        # 흔한 alias 보정
-        if "hidden_dim" in data and "hid_dim" not in data:
-            data["hid_dim"] = data["hidden_dim"]
-        if "num_layer" in data and "num_layers" not in data:
-            data["num_layers"] = data["num_layer"]
-        if "lr" in data and "learning_rate" not in data:
-            data["learning_rate"] = data["lr"]
+        # ---------------------------------------------------------
+        # Unified Config Aliasing & Normalization
+        # ---------------------------------------------------------
+        
+        # 0. in_dim aliases
+        for k in ["input_dim"]:
+            if k in data:
+                val = data.pop(k)
+                if "in_dim" not in data:
+                    data["in_dim"] = val
+
+        # 1. hidden_dim aliases
+        for k in ["hid_dim", "embed_dim", "hidden_channels"]:
+            if k in data:
+                val = data.pop(k)
+                if "hidden_dim" not in data:
+                    data["hidden_dim"] = val
+
+        # 2. num_layers aliases
+        for k in ["num_layer", "gnn_layers"]:
+            if k in data:
+                val = data.pop(k)
+                if "num_layers" not in data:
+                    data["num_layers"] = val
+
+        # 3. readout/pooling aliases
+        for k in ["pooling"]:
+            if k in data:
+                val = data.pop(k)
+                if "readout" not in data:
+                    data["readout"] = val
+
+        # 4. dropout aliases
+        for k in ["dropout_p"]:
+            if k in data:
+                val = data.pop(k)
+                if "dropout" not in data:
+                    data["dropout"] = val
+
+        # 5. out_dim aliases
+        for k in ["num_classes"]:
+            if k in data:
+                val = data.pop(k)
+                if "out_dim" not in data:
+                    data["out_dim"] = val
 
         valid = {f.name for f in fields(cls)}
         filtered = {k: v for k, v in data.items() if k in valid}
