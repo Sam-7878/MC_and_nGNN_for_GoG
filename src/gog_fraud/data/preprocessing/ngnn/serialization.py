@@ -20,6 +20,8 @@ def save_rooted_subgraphs(
     
     # We combine them into a single Batch object for easier I/O and loading
     batched_data = Batch.from_data_list(subgraphs)
+    batched_data.subgraph_idx = batched_data.batch
+    del batched_data.batch
     
     # Attach serialization metadata
     batched_data.extraction_metadata = metadata

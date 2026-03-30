@@ -56,8 +56,15 @@ class nGNNOnlineTransform(BaseTransform):
         # Combine all rooted subgraphs for this Level 1 sample into a Batch
         nested_batch = Batch.from_data_list(subgraphs)
         
+        # PyG sets nested_batch.batch as mapping from node -> subgraph 
+        # We rename it to subgraph_idx so the outer DataLoader doesn't overwrite it
+        nested_batch.subgraph_idx = nested_batch.batch
+        # We can delete .batch or leave it; PyG data collate will overwrite it 
+        # with the parent graph mapping [0...batch_size-1].
+        del nested_batch.batch
+        
         # We also want to preserve the original sample ID
-        for key in ['sample_id', 'contract_id', 'label', 'split']:
+        for key in ['sample_id', 'contract_id', 'label', 'split', 'y']:
             if hasattr(data, key):
                 setattr(nested_batch, key, getattr(data, key))
 
