@@ -45,8 +45,12 @@ class Level1nGNN(nn.Module):
             pooling=nested_readout
         )
 
+        classifier_in_dim = hidden_dim
+        if nested_readout == "meanmax":
+            classifier_in_dim = hidden_dim * 2
+
         self.classifier = MLPHead(
-            in_dim=hidden_dim,
+            in_dim=classifier_in_dim,
             hidden_dim=head_hidden_dim or hidden_dim,
             out_dim=num_classes,
             dropout=dropout
@@ -137,29 +141,56 @@ class Level1nGNN(nn.Module):
         
         return global_subgraph_idx, subgraph_to_parent, node_to_parent
 
-    def encode_graph(self, data) -> torch.Tensor:
-        global_subgraph_idx, subgraph_to_parent, node_to_parent = self._resolve_batch_indices(data)
+    # def encode_graph(self, data) -> torch.Tensor:
+    #     global_subgraph_idx, subgraph_to_parent, node_to_parent = self._resolve_batch_indices(data)
         
-        # Debug
-        if node_to_parent.max() > 1000:
-             print(f"[DEBUG Encode] subgraph_to_parent min/max: {subgraph_to_parent.min().item()}/{subgraph_to_parent.max().item()}")
+    #     # Debug
+    #     if node_to_parent.max() > 1000:
+    #          print(f"[DEBUG Encode] subgraph_to_parent min/max: {subgraph_to_parent.min().item()}/{subgraph_to_parent.max().item()}")
 
-        # Because nested_encoder currently expects data.batch to be node -> subgraph mapping:
-        orig_batch = getattr(data, 'batch', None)
-        data.batch = global_subgraph_idx
+    #     # Because nested_encoder currently expects data.batch to be node -> subgraph mapping:
+    #     orig_batch = getattr(data, 'batch', None)
+    #     data.batch = global_subgraph_idx
         
-        subgraph_embs = self.nested_encoder(data)
+    #     subgraph_embs = self.nested_encoder(data)
         
-        # Debug
-        if node_to_parent.max() > 1000:
-            print(f"[DEBUG Encode] subgraph_embs shape: {subgraph_embs.shape}")
-            print(f"[DEBUG Encode] subgraph_to_parent length: {len(subgraph_to_parent)}")
+    #     # Debug
+    #     if node_to_parent.max() > 1000:
+    #         print(f"[DEBUG Encode] subgraph_embs shape: {subgraph_embs.shape}")
+    #         print(f"[DEBUG Encode] subgraph_to_parent length: {len(subgraph_to_parent)}")
 
-        # Restore orig_batch 
-        data.batch = orig_batch
+    #     # Restore orig_batch 
+    #     data.batch = orig_batch
 
-        graph_embs = self.nested_readout(subgraph_embs, subgraph_to_parent)
-        return graph_embs
+    #     graph_embs = self.nested_readout(subgraph_embs, subgraph_to_parent)
+    #     return graph_embs
+
+    def encode_graph(self, data):
+            # 1. 일반 그래프 데이터의 경우, node -> parent_graph 매핑 정보만 추출
+            batch_idx = getattr(data, 'batch', None)
+            if batch_idx is None:
+                batch_idx = torch.zeros(data.x.size(0), dtype=torch.long, device=data.x.device)
+
+            # 2. nested_encoder 내부에서 자체적으로 Pooling을 수행하도록 유도
+            # (subgraph_pooling="main_root" 로 설정 시 여기서 root 노드만 추출하거나 mean_pool 수행)
+            subgraph_embs = self.nested_encoder(data)
+
+            # 3. 데이터에 중첩(Nested) 구조가 없는 일반 그래프인 경우:
+            # subgraph_embs의 개수와 원래 batch_size(예: 16)가 일치하게 됩니다.
+            # 이 경우 중복 Pooling(nested_readout)을 할 필요가 없습니다.
+            batch_size = int(batch_idx.max().item() + 1)
+            
+            if subgraph_embs.size(0) == batch_size:
+                # 서브그래프 개수 == 부모 그래프 개수이므로 바로 반환
+                return subgraph_embs
+            
+            # 4. (만약 진짜 nGNN 데이터 구조가 들어왔다면) 추가 Pooling 수행
+            # 이 부분은 추후 전처리에서 subgraph_idx를 제대로 만들어 주었을 때 동작합니다.
+            _, subgraph_to_parent, _ = self._resolve_batch_indices(data)
+            
+            graph_embs = self.nested_readout(subgraph_embs, subgraph_to_parent)
+            return graph_embs
+    
 
     def embed(self, data) -> torch.Tensor:
         return self.encode_graph(data)

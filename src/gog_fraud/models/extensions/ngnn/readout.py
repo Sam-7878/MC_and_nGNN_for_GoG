@@ -24,5 +24,9 @@ class StandardNestedReadout(NestedReadout):
             return global_max_pool(subgraph_embs, subgraph_to_graph_batch)
         elif self.pooling == "sum":
             return global_add_pool(subgraph_embs, subgraph_to_graph_batch)
+        elif self.pooling == "meanmax":
+            p1 = global_mean_pool(subgraph_embs, subgraph_to_graph_batch)
+            p2 = global_max_pool(subgraph_embs, subgraph_to_graph_batch)
+            return torch.cat([p1, p2], dim=-1)
         else:
-            raise ValueError(f"Unknown readout pooling method: {self.pooling}")
+            raise ValueError(f"Unknown readout pooling method: {self.pooling}. Supported: ['mean', 'max', 'sum', 'meanmax']")

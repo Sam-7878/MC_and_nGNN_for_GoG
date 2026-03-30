@@ -79,13 +79,44 @@ class Level1ModelConfig:
 
         data = _cfg_to_plain_dict(cfg)
 
-        # 흔한 alias 보정
-        if "hidden_dim" in data and "hid_dim" not in data:
-            data["hid_dim"] = data["hidden_dim"]
-        if "num_layer" in data and "num_layers" not in data:
-            data["num_layers"] = data["num_layer"]
-        if "lr" in data and "learning_rate" not in data:
-            data["learning_rate"] = data["lr"]
+        # ---------------------------------------------------------
+        # Unified Config Aliasing & Normalization
+        # ---------------------------------------------------------
+        
+        # 0. in_dim aliases
+        for k in ["in_dim", "input_dim", "num_node_features", "node_feat_dim"]:
+            if k in data and k != "in_dim":
+                data["in_dim"] = data.pop(k)
+
+        # 1. hidden_dim aliases
+        for k in ["hidden_dim", "hid_dim", "embed_dim", "hidden_channels"]:
+            if k in data and k != "hidden_dim":
+                data["hidden_dim"] = data.pop(k)
+
+        # 2. num_layers aliases
+        for k in ["num_layers", "num_layer", "gnn_layers"]:
+            if k in data and k != "num_layers":
+                data["num_layers"] = data.pop(k)
+
+        # 3. readout/pooling aliases
+        for k in ["readout", "pooling"]:
+            if k in data and k != "readout":
+                data["readout"] = data.pop(k)
+
+        # 4. dropout aliases
+        for k in ["dropout", "dropout_p"]:
+            if k in data and k != "dropout":
+                data["dropout"] = data.pop(k)
+
+        # 5. encoder_backend aliases
+        for k in ["encoder_backend", "backbone"]:
+            if k in data and k != "encoder_backend":
+                data["encoder_backend"] = data.pop(k)
+
+        # 6. out_dim aliases
+        for k in ["out_dim", "num_classes"]:
+            if k in data and k != "out_dim":
+                data["out_dim"] = data.pop(k)
 
         valid = {f.name for f in fields(cls)}
         filtered = {k: v for k, v in data.items() if k in valid}
@@ -210,11 +241,13 @@ class Level1Model(nn.Module):
                 num_classes=cfg.out_dim,
                 dropout=cfg.dropout,
                 subgraph_pooling=getattr(cfg, "subgraph_pooling", "main_root"),
-                nested_readout=cfg.readout.replace("meanmax", "mean") # simple translation
+                nested_readout=cfg.readout
             )
             self.readout = None
         else:
             raise ValueError(f"Unknown encoder backend: {self.encoder_backend}")
+
+        print(f"[Level1Model] Backend: {self.encoder_backend}, Readout: {cfg.readout}, Hidden: {cfg.hidden_dim}")
 
 
         readout_dim = cfg.hidden_dim
