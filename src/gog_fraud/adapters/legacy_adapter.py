@@ -32,6 +32,13 @@ class LegacyAdapterConfig:
     weight_decay: float = 0.0
     dropout: float = 0.0
 
+    # Large Graph Partitioning Settings
+    max_nodes: int = 3000
+    large_graph_mode: str = "partition"  # "skip" | "partition"
+    partition_size: int = 3000
+    partition_overlap: float = 0.0
+    aggregation_method: str = "max"     # "max" | "topk_mean"
+
     def __post_init__(self):
         if self.agg_method and not self.score_reduce:
             self.score_reduce = self.agg_method
@@ -122,6 +129,74 @@ def _prepare_graph_for_detector(data: Data) -> Data:
     data.x = data.x.float()
     data.edge_index = data.edge_index.long()
     return data
+
+
+def _repackage_minimal(data: Data) -> Data:
+    """
+    Keep only the fields required for the legacy detector to save memory.
+    """
+    clean_data = Data(
+        x=data.x.float(),
+        edge_index=data.edge_index.long()
+    )
+    if hasattr(data, "y") and data.y is not None:
+        clean_data.y = data.y
+    
+    if hasattr(data, "num_nodes"):
+        clean_data.num_nodes = data.num_nodes
+    else:
+        clean_data.num_nodes = data.x.size(0)
+        
+    return clean_data
+
+
+def _partition_graph(
+    data: Data, 
+    partition_size: int, 
+    overlap: float = 0.0
+) -> List[Data]:
+    """
+    Split graph into subgraphs using node-chunking / clustering.
+    For simplicity, we use induced subgraphs of node chunks.
+    """
+    from torch_geometric.utils import subgraph
+    
+    num_nodes = data.num_nodes or data.x.size(0)
+    if num_nodes <= partition_size:
+        return [data]
+    
+    # Simple chunking without shuffle for stability/locality
+    indices = torch.arange(num_nodes)
+    
+    subgraphs = []
+    # If overlap > 0, we can implementation sliding window, 
+    # but for now we follow the "no overlap" user preference.
+    step = int(partition_size * (1.0 - overlap))
+    if step < 1: step = partition_size
+    
+    for i in range(0, num_nodes, step):
+        chunk = indices[i : i + partition_size]
+        if chunk.numel() == 0:
+            continue
+            
+        edge_index, _ = subgraph(chunk, data.edge_index, relabel_nodes=True, num_nodes=num_nodes)
+        
+        # Induced subgraph
+        sub_data = Data(
+            x=data.x[chunk].clone(),
+            edge_index=edge_index,
+            num_nodes=len(chunk)
+        )
+        if hasattr(data, "y") and data.y is not None:
+            # If label is per-graph, duplicate it. If per-node, slice it.
+            if data.y.numel() == 1:
+                sub_data.y = data.y
+            elif data.y.numel() == num_nodes:
+                sub_data.y = data.y[chunk].clone()
+        
+        subgraphs.append(sub_data)
+        
+    return subgraphs
 
 
 # -----------------------------------------------------------------------------
@@ -315,6 +390,19 @@ class LegacyRunOutput:
     model_name: str
     records: List[LegacyRecord]
     skipped: int
+    
+    # Extra diagnostics (Added for Large Graph Partition Logic)
+    processed_total: int = 0
+    full_graph_count: int = 0
+    partitioned_graph_count: int = 0
+    partition_size_dist: List[int] = None
+    failure_reasons: Dict[str, int] = None
+    skipped_labels: List[float] = None
+
+    def __post_init__(self):
+        if self.partition_size_dist is None: self.partition_size_dist = []
+        if self.failure_reasons is None: self.failure_reasons = {}
+        if self.skipped_labels is None: self.skipped_labels = []
 
     @property
     def contract_ids(self) -> List[str]:
@@ -365,6 +453,13 @@ class LegacyBatchRunner:
             detector_overrides = getattr(config, "detector_overrides", detector_overrides)
             score_reduce = getattr(config, "score_reduce", score_reduce)
             progress_every = getattr(config, "progress_every", progress_every)
+            self.config = config
+        else:
+            self.config = LegacyAdapterConfig(
+                detector_overrides=detector_overrides,
+                score_reduce=score_reduce,
+                progress_every=progress_every
+            )
  
         self.detector_overrides = detector_overrides or {}
         self.score_reduce = score_reduce or "mean"
@@ -525,13 +620,22 @@ class LegacyBatchRunner:
         graphs: Sequence[Any],
     ) -> LegacyRunOutput:
         items = _safe_list(graphs)
+        total = len(items)
 
         logger.info("")
-        logger.info("[LegacyBatchRunner] === Running %s ===", model_name)
+        logger.info("[LegacyBatchRunner] === Running %s (total=%d) ===", model_name, total)
 
-        records: List[LegacyRecord] = []
-        skipped = 0
-        total = len(items)
+        output = LegacyRunOutput(
+            model_name=str(model_name),
+            records=[],
+            skipped=0,
+            processed_total=total,
+            full_graph_count=0,
+            partitioned_graph_count=0,
+            partition_size_dist=[],
+            failure_reasons={},
+            skipped_labels=[]
+        )
 
         for idx, item in enumerate(items):
             if idx % self.progress_every == 0:
@@ -543,141 +647,151 @@ class LegacyBatchRunner:
             label = _extract_label(item, data)
 
             if data is None:
-                logger.warning(
-                    "[LegacyRunner:%s] Skip %s: cannot unwrap graph to PyG Data",
-                    model_name,
-                    contract_id,
-                )
-                skipped += 1
+                logger.warning("[LegacyRunner:%s] Skip %s: cannot unwrap", model_name, contract_id)
+                output.skipped += 1
+                output.failure_reasons["cannot_unwrap"] = output.failure_reasons.get("cannot_unwrap", 0) + 1
+                if label is not None: output.skipped_labels.append(label)
                 continue
 
-            try:
-                data = _prepare_graph_for_detector(data)
-            except Exception as exc:
-                logger.warning(
-                    "[LegacyRunner:%s] Skip %s: invalid graph (%s)",
-                    model_name,
-                    contract_id,
-                    exc,
-                )
-                skipped += 1
-                continue
-
-            # ** SAFETY CHECK FOR OOM **
+            # ** SAFETY CHECK & PARTITION FALLBACK **
             num_nodes = getattr(data, 'num_nodes', None)
             if num_nodes is None and getattr(data, 'x', None) is not None:
                 num_nodes = data.x.size(0)
-            if num_nodes is not None and num_nodes > 2000:
-                logger.warning(
-                    "[LegacyRunner:%s] Skip %s: graph too large (num_nodes=%d) avoiding OOM",
-                    model_name,
-                    contract_id,
-                    num_nodes
-                )
-                skipped += 1
-                continue
+            
+            max_nodes = self.config.max_nodes
+            is_large = (num_nodes is not None and num_nodes > max_nodes)
 
+            if is_large:
+                if self.config.large_graph_mode == "skip":
+                    logger.warning("[LegacyRunner:%s] Skip %s: graph too large (%d)", model_name, contract_id, num_nodes)
+                    output.skipped += 1
+                    output.failure_reasons["graph_too_large_skipped"] = output.failure_reasons.get("graph_too_large_skipped", 0) + 1
+                    if label is not None: output.skipped_labels.append(label)
+                    continue
+                else:
+                    logger.info("[LegacyRunner:%s] %s is large (%d nodes) -> Partitioning", model_name, contract_id, num_nodes)
+                    record = self._run_partitioned(model_name, data, contract_id, label)
+                    if record:
+                        output.records.append(record)
+                        output.partitioned_graph_count += 1
+                        if num_nodes is not None: output.partition_size_dist.append(num_nodes)
+                    else:
+                        output.skipped += 1
+                        output.failure_reasons["partition_run_failed"] = output.failure_reasons.get("partition_run_failed", 0) + 1
+                        if label is not None: output.skipped_labels.append(label)
+                    continue
+
+            # Normal path for safe graphs
+            try:
+                # Prepare/Sanitize
+                data = _prepare_graph_for_detector(data)
+                record = self._run_single_graph_full(model_name, data, contract_id, label)
+                if record:
+                    output.records.append(record)
+                    output.full_graph_count += 1
+                else:
+                    logger.warning("[LegacyRunner:%s] %s: full run returned no scores", model_name, contract_id)
+                    output.skipped += 1
+                    output.failure_reasons["full_run_no_scores"] = output.failure_reasons.get("full_run_no_scores", 0) + 1
+                    if label is not None: output.skipped_labels.append(label)
+            except Exception as exc:
+                logger.warning("[LegacyRunner:%s] Skip %s: %r", model_name, contract_id, exc)
+                output.skipped += 1
+                output.failure_reasons["exception"] = output.failure_reasons.get("exception", 0) + 1
+                if label is not None: output.skipped_labels.append(label)
+
+        logger.info(
+            "[LegacyRunner:%s] Done. Scored %d. Full=%d Part=%d (skipped=%d)",
+            model_name, len(output.records), output.full_graph_count, output.partitioned_graph_count, output.skipped
+        )
+        return output
+
+    def _run_single_graph_full(self, model_name: str, data: Data, contract_id: str, label: Optional[float]) -> Optional[LegacyRecord]:
+        import gc
+        detector = None
+        try:
+            # Minimal repackaging
+            clean_data = _repackage_minimal(data)
+            
+            detector = _build_detector(
+                model_name=model_name,
+                detector_kwargs=self._get_detector_kwargs(model_name),
+            )
+            detector.fit(clean_data)
+            scores, score_src = _extract_detector_scores(detector, clean_data)
+
+            if scores is None or score_src is None:
+                return None
+
+            graph_score = _reduce_node_scores_to_graph_score(
+                scores,
+                reduce=self.score_reduce,
+            )
+            return LegacyRecord(
+                model_name=str(model_name),
+                contract_id=contract_id,
+                score=float(graph_score),
+                label=label,
+                score_source=score_src,
+                num_scores=int(scores.numel()),
+            )
+        finally:
+            if detector is not None: del detector
+            gc.collect()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
+
+    def _run_partitioned(self, model_name: str, data: Data, contract_id: str, label: Optional[float]) -> Optional[LegacyRecord]:
+        import gc
+        subgraphs = _partition_graph(data, self.config.partition_size, self.config.partition_overlap)
+        print(f"[LegacyRunner:%s] %s split into %d subgraphs", model_name, contract_id, len(subgraphs))
+        
+        all_node_scores = []
+        
+        logger.info("[LegacyRunner:%s] %s split into %d subgraphs", model_name, contract_id, len(subgraphs))
+        
+        for i, sub_data in enumerate(subgraphs):
+            detector = None
             try:
                 detector = _build_detector(
                     model_name=model_name,
                     detector_kwargs=self._get_detector_kwargs(model_name),
                 )
+                detector.fit(sub_data)
+                scores, _ = _extract_detector_scores(detector, sub_data)
+                
+                if scores is not None:
+                    # Move to CPU immediately to save GPU memory during loop
+                    all_node_scores.append(scores.detach().cpu())
             except Exception as exc:
-                logger.exception(
-                    "[LegacyRunner:%s] Failed to build detector: %s",
-                    model_name,
-                    exc,
-                )
-                raise
-
-            try:
-                detector.fit(data)
-            except Exception as exc:
-                logger.warning(
-                    "[LegacyRunner:%s] Skip %s: fit() failed: %r",
-                    model_name,
-                    contract_id,
-                    exc,
-                )
-                skipped += 1
-                continue
-
-            scores, score_src = _extract_detector_scores(detector, data)
-
-            if scores is None or score_src is None:
-                available = [
-                    name
-                    for name in [
-                        "decision_scores_",
-                        "decision_score_",
-                        "decision_function",
-                        "predict",
-                    ]
-                    if hasattr(detector, name)
-                ]
-                logger.warning(
-                    "[LegacyRunner:%s] Skip %s: no usable detector scores after fit() "
-                    "(available=%s)",
-                    model_name,
-                    contract_id,
-                    available,
-                )
-                skipped += 1
-                continue
-
-            try:
-                graph_score = _reduce_node_scores_to_graph_score(
-                    scores,
-                    reduce=self.score_reduce,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[LegacyRunner:%s] Skip %s: score reduction failed: %r",
-                    model_name,
-                    contract_id,
-                    exc,
-                )
-                skipped += 1
-                continue
-
-            records.append(
-                LegacyRecord(
-                    model_name=str(model_name),
-                    contract_id=contract_id,
-                    score=float(graph_score),
-                    label=label,
-                    score_source=score_src,
-                    num_scores=int(scores.numel()),
-                )
-            )
-
-            logger.debug(
-                "[LegacyRunner:%s] %s score extracted via %s | num_scores=%d | "
-                "graph_score=%.6f",
-                model_name,
-                contract_id,
-                score_src,
-                int(scores.numel()),
-                float(graph_score),
-            )
-
-            # Explicit memory cleanup
-            del detector
-            del scores
-            import gc
-            gc.collect()
-
-        logger.info(
-            "[LegacyRunner:%s] Done. Scored %d contracts. (skipped=%d)",
-            model_name,
-            len(records),
-            skipped,
-        )
-
-        return LegacyRunOutput(
+                logger.debug("[LegacyRunner:%s] Partition %d failed for %s: %r", model_name, i, contract_id, exc)
+            finally:
+                if detector is not None: del detector
+                # Conservative cleanup after EVERY subgraph as requested
+                gc.collect()
+                if torch.cuda.is_available(): torch.cuda.empty_cache()
+        
+        if not all_node_scores:
+            return None
+            
+        combined_scores = torch.cat(all_node_scores, dim=0)
+        
+        # User preference: Max or Top-K mean
+        agg_method = self.config.aggregation_method.lower()
+        if agg_method == "max":
+            final_score = float(combined_scores.max().item())
+        elif agg_method == "topk_mean":
+            k = min(self.config.topk, int(combined_scores.numel()))
+            final_score = float(torch.topk(combined_scores, k=k).values.mean().item())
+        else:
+            final_score = float(combined_scores.mean().item())
+            
+        return LegacyRecord(
             model_name=str(model_name),
-            records=records,
-            skipped=skipped,
+            contract_id=contract_id,
+            score=final_score,
+            label=label,
+            score_source=f"partitioned_{agg_method}",
+            num_scores=int(combined_scores.numel()),
         )
 
     def run_many(
