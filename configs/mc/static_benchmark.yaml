@@ -1,0 +1,28 @@
+# configs/mc/static_benchmark.yaml
+dataset:
+  transactions_root: "../_data/dataset/transactions"
+  labels_path: "../_data/dataset/labels.csv"
+  chain: "polygon"
+  auto_split: true
+  train_ratio: 0.7
+  val_ratio: 0.15
+
+level1:
+  encoder_backend: "gnn"
+  in_dim: 32
+  out_dim: 256
+  epochs: 5
+  batch_size: 128
+  lr: 0.001
+
+level2:
+  hidden_dim: 128
+  epochs: 5
+  batch_size: 128
+  lr: 0.001
+
+mc_samples: 8
+dropout_p: 0.10
+
+setting: "mc_static"
+output: "results/mc_static_benchmark"
