@@ -29,17 +29,21 @@ class StreamingDataset(FraudDataset):
         
         # For each contract in labels, find its earliest timestamp
         for cid in self.labels.keys():
+            # Support both flat style (0xabc.csv) and folder style (0xabc/*.csv)
+            flat_file = tx_dir / f"{cid}.csv"
             contract_dir = tx_dir / str(cid)
-            if not contract_dir.exists():
-                missing += 1
-                continue
-                
-            csv_files = list(contract_dir.glob("*.csv"))
+            
+            csv_files = []
+            if flat_file.exists():
+                csv_files = [flat_file]
+            elif contract_dir.exists() and contract_dir.is_dir():
+                csv_files = list(contract_dir.glob("*.csv"))
+            
             if not csv_files:
                 missing += 1
                 continue
             
-            # Read just the first row of all CSVs in the contract folder
+            # Read just the first row of all CSVs associated with the contract
             min_ts = float('inf')
             for csv_f in csv_files:
                 try:

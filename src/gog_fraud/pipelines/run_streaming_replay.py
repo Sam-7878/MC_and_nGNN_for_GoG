@@ -99,7 +99,9 @@ def evaluate_streaming(model, dataset, cfg, setting, train_g, stream_g, stage="l
             avg_lat = sum(latencies[-50:]) / 50 * 1000
             log.info(f"[{i+1}/{total_graphs}] Latency: {avg_lat:.2f}ms. Uncertainty avg: {float(all_unc[-1]):.3f}")
             
-    # Metrics
+    if not all_y:
+        return None, None, None, None
+
     yt = torch.cat(all_y, dim=0).numpy()
     ys = torch.cat(all_scores, dim=0).numpy()
     unc = torch.cat(all_unc, dim=0).numpy()
@@ -136,73 +138,73 @@ def main():
     # Actually perform the read
     train_g, stream_g = dataset.prepare_streaming_splits(tx_root, train_ratio=0.8)
     
-    # Optional subsetting for Ethereum ROI or dry runs
+    # Optional subsetting
     if args.max_samples and len(stream_g) > args.max_samples:
         log.info(f"[Streaming Replay] Subsetting stream_g to {args.max_samples} samples.")
         stream_g = stream_g[:args.max_samples]
     
+    if not stream_g:
+        log.error("[Streaming Replay] No samples found in stream_g. Check dataset or --chain.")
+        return
+
     # Document Subset Range
-    if stream_g:
-        sample_ids = [getattr(g, 'contract_id', str(i)) for i, g in enumerate(stream_g)]
-        log.info(f"[Streaming Replay] Replay Subset: {len(stream_g)} contracts.")
-        # If dataset has stored timestamps, we can be more precise
-        if hasattr(dataset, 'contract_timestamps'):
-            sub_ts = [dataset.contract_timestamps[cid] for cid in dataset.labels.keys() if cid in sample_ids]
-            if sub_ts:
-                log.info(f"[Streaming Replay] Time Range: {min(sub_ts)} - {max(sub_ts)}")
+    sample_ids = [getattr(g, 'contract_id', str(i)) for i, g in enumerate(stream_g)]
+    log.info(f"[Streaming Replay] Replay Subset: {len(stream_g)} contracts.")
+    if hasattr(dataset, 'contract_timestamps'):
+        sub_ts = [dataset.contract_timestamps[cid] for cid in dataset.labels.keys() if cid in sample_ids]
+        if sub_ts:
+            log.info(f"[Streaming Replay] Time Range: {min(sub_ts)} - {max(sub_ts)}")
 
     l1_cache_path = output_dir / f"l1_model_weights_{chain}.pt"
     
-    # 1. Train or load Level 1 on historical context (train_g)
     log.info("(A) Level 1 Warmup on Historical Context")
     trainer = _build_level1_trainer(cfg)
     if l1_cache_path.exists():
         trainer.model.load_state_dict(torch.load(l1_cache_path))
         log.info("L1 Historical Warmup weights loaded from cache.")
     else:
-        # For simplicity, using same validate as train here to force warmup on base data
-        _call_level1_trainer_fit(trainer, train_g, train_g[:100], dataset.labels, cfg)
+        _call_level1_trainer_fit(trainer, train_g, train_g[:100] if train_g else [], dataset.labels, cfg)
         torch.save(trainer.model.state_dict(), l1_cache_path)
     
     l1_model = trainer.model
 
-    # 2. Progressively execute streaming evaluation
-    log.info("(B) Streaming Replay Simulation Phase (Virtual chronologic)")
+    log.info("(B) Streaming Replay Simulation Phase")
     table = BenchmarkTable()
     
     yt, ys, unc, latencies = evaluate_streaming(l1_model, dataset, cfg, setting, train_g, stream_g, stage="l1")
     
-    # Triage Analysis
-    from gog_fraud.evaluation.mc_metrics import calc_fixed_budget_utility
-    budget_50 = calc_fixed_budget_utility(yt, ys, unc, budget=min(50, len(yt)))
-    budget_1pct = calc_fixed_budget_utility(yt, ys, unc, budget=0.01)
-    budget_5pct = calc_fixed_budget_utility(yt, ys, unc, budget=0.05)
-    
-    log.info(f"Triage Utility (Top 50) -> Gain: {budget_50['precision_gain']:.4f} (Cov: {budget_50['coverage']:.2%})")
-    log.info(f"Triage Utility (Top 1%) -> Gain: {budget_1pct['precision_gain']:.4f} (Cov: {budget_1pct['coverage']:.2%})")
-    log.info(f"Triage Utility (Top 5%) -> Gain: {budget_5pct['precision_gain']:.4f} (Cov: {budget_5pct['coverage']:.2%})")
-    
-    res = evaluate_benchmark(y_true=yt, y_score=ys, model_name="L1-StreamMC", setting=setting)
-    res["triage_gain_50"] = budget_50["precision_gain"]
-    res["triage_gain_5pct"] = budget_5pct["precision_gain"]
-    
-    table.add(res)
-    table.save_csv(output_dir / f"streaming_results_{chain}.csv")
-    
-    if latencies:
-        avg_lat = np.mean(latencies) * 1000
-        p95 = np.percentile(latencies, 95) * 1000
-        p99 = np.percentile(latencies, 99) * 1000
-        throughput = 1.0 / np.mean(latencies)
+    if yt is not None:
+        # Triage Analysis
+        from gog_fraud.evaluation.mc_metrics import calc_fixed_budget_utility
+        budget_50 = calc_fixed_budget_utility(yt, ys, unc, budget=min(50, len(yt)))
+        budget_1pct = calc_fixed_budget_utility(yt, ys, unc, budget=0.01)
+        budget_5pct = calc_fixed_budget_utility(yt, ys, unc, budget=0.05)
         
-        vram_mb = 0
-        if torch.cuda.is_available():
-            vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+        log.info(f"Triage Utility (Top 50) -> Gain: {budget_50['precision_gain']:.4f} (Cov: {budget_50['coverage']:.2%})")
+        log.info(f"Triage Utility (Top 1%) -> Gain: {budget_1pct['precision_gain']:.4f} (Cov: {budget_1pct['coverage']:.2%})")
+        log.info(f"Triage Utility (Top 5%) -> Gain: {budget_5pct['precision_gain']:.4f} (Cov: {budget_5pct['coverage']:.2%})")
+        
+        res = evaluate_benchmark(y_true=yt, y_score=ys, model_name="L1-StreamMC", setting=setting)
+        # Avoid dict assignment to dataclass. Just log the gain.
+        log.info(f"Streaming Result for {chain}: ROC-AUC={res.roc_auc:.4f}, PR-AUC={res.pr_auc:.4f}")
+        
+        table.add(res)
+        table.save_csv(output_dir / f"streaming_results_{chain}.csv")
+        
+        if latencies:
+            avg_lat = np.mean(latencies) * 1000
+            p95 = np.percentile(latencies, 95) * 1000
+            p99 = np.percentile(latencies, 99) * 1000
+            throughput = 1.0 / np.mean(latencies)
             
-        log.info(f"--- Latency (ms) | Avg: {avg_lat:.2f} | P95: {p95:.2f} | P99: {p99:.2f}")
-        log.info(f"--- Throughput: {throughput:.2f} GPS | Peak VRAM: {vram_mb:.1f} MB")
+            vram_mb = 0
+            if torch.cuda.is_available():
+                vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+                
+            log.info(f"--- Latency (ms) | Avg: {avg_lat:.2f} | P95: {p95:.2f} | P99: {p99:.2f}")
+            log.info(f"--- Throughput: {throughput:.2f} GPS | Peak VRAM: {vram_mb:.1f} MB")
 
-    table.print_summary()
+        table.print_summary()
 
 if __name__ == "__main__":
     main()

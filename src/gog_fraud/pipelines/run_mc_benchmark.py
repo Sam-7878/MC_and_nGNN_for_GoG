@@ -84,7 +84,7 @@ def evaluate_with_mc(model, dataset, cfg, setting, stage="l1", l1_model=None):
     ys = torch.cat(all_scores, dim=0).numpy()
     unc = torch.cat(all_unc, dim=0).numpy()
     
-    # Validation against dimension parity just in case (e.g. graph vs node resolution)
+    # Validation against dimension parity
     min_size = min(len(yt), len(ys))
     
     return yt[:min_size], ys[:min_size], unc[:min_size], mc_cfg
@@ -155,9 +155,14 @@ def main():
                 log.info("[MC Benchmark] Calculating CIs via bootstrapping...")
                 m_auc, l_auc, u_auc = calc_bootstrap_ci(yt_mc, ys_mc, roc_auc_score)
                 m_pr, l_pr, u_pr = calc_bootstrap_ci(yt_mc, ys_mc, average_precision_score)
-                res_mc["roc_auc_ci"] = (l_auc, u_auc)
-                res_mc["pr_auc_ci"] = (l_pr, u_pr)
+                res_mc.ci_roc_auc = (l_auc, u_auc)
+                res_mc.ci_pr_auc = (l_pr, u_pr)
                 log.info(f"L1-MC ROC-AUC CI: [{l_auc:.4f}, {u_auc:.4f}]")
+
+            # Additional MC Specific Metrics
+            ece = calc_calibration_ece(yt_mc, ys_mc)
+            corr = calc_uncertainty_correlation(yt_mc, ys_mc, unc_mc)
+            sel_res = run_selective_prediction(yt_mc, ys_mc, unc_mc, coverage_ratio=0.8)
 
             table.add(res_mc)
             
@@ -174,7 +179,7 @@ def main():
 
     if "l1_l2" in active_stages and l1_model is not None:
         log.info("=" * 50)
-        log.info("(B) Running Stage 2: Level 1 + Level 2 + MC ...")
+        log.info(f"(B) Running Stage 2: Level 1 + Level 2 + MC ({chain}) ...")
         train_g, valid_g, test_g = _get_split_graphs(dataset, cfg, setting)
         l2_trainer = _build_level2_trainer(cfg, l1_model)
         
@@ -201,9 +206,14 @@ def main():
                 log.info("[MC Benchmark] Calculating CIs via bootstrapping...")
                 m_auc, l_auc, u_auc = calc_bootstrap_ci(yt_mc, ys_mc, roc_auc_score)
                 m_pr, l_pr, u_pr = calc_bootstrap_ci(yt_mc, ys_mc, average_precision_score)
-                res_mc["roc_auc_ci"] = (l_auc, u_auc)
-                res_mc["pr_auc_ci"] = (l_pr, u_pr)
+                res_mc.ci_roc_auc = (l_auc, u_auc)
+                res_mc.ci_pr_auc = (l_pr, u_pr)
                 log.info(f"L1+L2-MC ROC-AUC CI: [{l_auc:.4f}, {u_auc:.4f}]")
+
+            # Additional MC Specific Metrics
+            ece = calc_calibration_ece(yt_mc, ys_mc)
+            corr = calc_uncertainty_correlation(yt_mc, ys_mc, unc_mc)
+            sel_res = run_selective_prediction(yt_mc, ys_mc, unc_mc, coverage_ratio=0.8)
 
             table.add(res_mc)
             
