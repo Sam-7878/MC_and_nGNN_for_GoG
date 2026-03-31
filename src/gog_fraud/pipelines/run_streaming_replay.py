@@ -110,9 +110,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=str)
     parser.add_argument("--output", required=False, type=str, default=None)
+    parser.add_argument("--chain", required=False, type=str, default=None)
+    parser.add_argument("--max_samples", required=False, type=int, default=None)
     args = parser.parse_args()
 
     cfg = _load_config(args.config)
+    
+    # Chain override
+    if args.chain:
+        if "dataset" not in cfg: cfg["dataset"] = {}
+        cfg["dataset"]["chain"] = args.chain
+        log.info(f"[Streaming Replay] Chain override: {args.chain}")
+
     setting = str(_cfg_get(cfg, "setting", "strict"))
     output_dir = Path(args.output or _cfg_get(cfg, "output", "results/streaming_replay"))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -123,10 +132,16 @@ def main():
     log.info("[Streaming Dataset] Initialization")
     dataset = StreamingDataset.from_config(cfg)
     tx_root = cfg.get("dataset", {}).get("transactions_root", "../_data/dataset/transactions")
+    
     # Actually perform the read
     train_g, stream_g = dataset.prepare_streaming_splits(tx_root, train_ratio=0.8)
     
-    l1_cache_path = output_dir / "l1_model_weights.pt"
+    # Optional subsetting for Ethereum ROI or dry runs
+    if args.max_samples and len(stream_g) > args.max_samples:
+        log.info(f"[Streaming Replay] Subsetting stream_g to {args.max_samples} samples.")
+        stream_g = stream_g[:args.max_samples]
+
+    l1_cache_path = output_dir / f"l1_model_weights_{chain}.pt"
     
     # 1. Train or load Level 1 on historical context (train_g)
     log.info("(A) Level 1 Warmup on Historical Context")
@@ -146,7 +161,15 @@ def main():
     table = BenchmarkTable()
     
     yt, ys, unc, latencies = evaluate_streaming(l1_model, dataset, cfg, setting, train_g, stream_g, stage="l1")
+    
+    # Triage Analysis
+    from gog_fraud.evaluation.mc_metrics import calc_fixed_budget_utility
+    budget_res = calc_fixed_budget_utility(yt, ys, unc, budget=min(50, len(yt)))
+    log.info(f"Fixed Budget Triage (Top {budget_res['budget']}) -> Std Precision: {budget_res['std_precision']:.3f}, Filtered Precision: {budget_res['filtered_precision']:.3f}, Gain: {budget_res['precision_gain']:.3f}")
+    
     res = evaluate_benchmark(y_true=yt, y_score=ys, model_name="L1-StreamMC", setting=setting)
+    res["triage_gain"] = budget_res["precision_gain"]
+    
     table.add(res)
     table.save_csv(output_dir / f"streaming_results_{chain}.csv")
     
@@ -154,7 +177,14 @@ def main():
         avg_lat = np.mean(latencies) * 1000
         p95 = np.percentile(latencies, 95) * 1000
         p99 = np.percentile(latencies, 99) * 1000
+        throughput = 1.0 / np.mean(latencies)
+        
+        vram_mb = 0
+        if torch.cuda.is_available():
+            vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+            
         log.info(f"--- Latency (ms) | Avg: {avg_lat:.2f} | P95: {p95:.2f} | P99: {p99:.2f}")
+        log.info(f"--- Throughput: {throughput:.2f} GPS | Peak VRAM: {vram_mb:.1f} MB")
 
     table.print_summary()
 

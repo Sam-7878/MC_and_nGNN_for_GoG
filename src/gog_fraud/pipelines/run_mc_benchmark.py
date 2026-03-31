@@ -16,7 +16,8 @@ from gog_fraud.evaluation.benchmark import BenchmarkTable, evaluate_benchmark
 from gog_fraud.models.extensions.mc.config import MCDropoutConfig
 from gog_fraud.models.extensions.mc.mc_dropout import MCDropoutEstimator
 from gog_fraud.evaluation.mc_metrics import (
-    calc_calibration_ece, calc_uncertainty_correlation, run_selective_prediction
+    calc_calibration_ece, calc_uncertainty_correlation, 
+    run_selective_prediction, calc_bootstrap_ci, calc_fixed_budget_utility
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
@@ -93,10 +94,20 @@ def main():
     parser.add_argument("--config", required=True, type=str)
     parser.add_argument("--output", required=False, type=str, default=None)
     parser.add_argument("--stages", required=False, type=str, default="l1,l1_l2")
+    parser.add_argument("--chain", required=False, type=str, default=None)
+    parser.add_argument("--bootstrap", action="store_true", help="Enable bootstrapping for CI")
+    parser.add_argument("--max_samples", required=False, type=int, default=None)
     args = parser.parse_args()
 
     active_stages = [s.strip().lower() for s in args.stages.split(",")]
     cfg = _load_config(args.config)
+    
+    # Chain override
+    if args.chain:
+        if "dataset" not in cfg: cfg["dataset"] = {}
+        cfg["dataset"]["chain"] = args.chain
+        log.info(f"[MC Benchmark] Chain override: {args.chain}")
+
     setting = str(_cfg_get(cfg, "setting", "strict"))
     output_dir = Path(args.output or _cfg_get(cfg, "output", "results/benchmark_mc"))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -105,13 +116,18 @@ def main():
     chain = cfg.get("dataset", {}).get("chain", 'polygon')
     
     table = BenchmarkTable()
-    l1_cache_path = output_dir / "l1_model_weights.pt"
+    l1_cache_path = output_dir / f"l1_model_weights_{chain}.pt"
     l1_model = None
 
     if "l1" in active_stages:
         log.info("=" * 50)
-        log.info("(A) Running Stage 1: Level 1 + MC ...")
+        log.info(f"(A) Running Stage 1: Level 1 + MC ({chain}) ...")
         train_g, valid_g, test_g = _get_split_graphs(dataset, cfg, setting)
+        
+        if args.max_samples and len(test_g) > args.max_samples:
+            log.info(f"[MC Benchmark] Subsetting evaluation test_g to {args.max_samples}")
+            test_g = test_g[:args.max_samples]
+
         trainer = _build_level1_trainer(cfg)
         
         # Load or train
@@ -133,13 +149,27 @@ def main():
         yt_mc, ys_mc, unc_mc, mc_cfg = evaluate_with_mc(trainer.model, dataset, cfg, setting, stage="l1")
         if yt_mc is not None:
             res_mc = evaluate_benchmark(y_true=yt_mc, y_score=ys_mc, model_name="L1-MC", setting=setting)
+            
+            if args.bootstrap:
+                from sklearn.metrics import roc_auc_score, average_precision_score
+                log.info("[MC Benchmark] Calculating CIs via bootstrapping...")
+                m_auc, l_auc, u_auc = calc_bootstrap_ci(yt_mc, ys_mc, roc_auc_score)
+                m_pr, l_pr, u_pr = calc_bootstrap_ci(yt_mc, ys_mc, average_precision_score)
+                res_mc["roc_auc_ci"] = (l_auc, u_auc)
+                res_mc["pr_auc_ci"] = (l_pr, u_pr)
+                log.info(f"L1-MC ROC-AUC CI: [{l_auc:.4f}, {u_auc:.4f}]")
+
             table.add(res_mc)
             
             # Additional MC Specific Metrics
             ece = calc_calibration_ece(yt_mc, ys_mc)
             corr = calc_uncertainty_correlation(yt_mc, ys_mc, unc_mc)
-            sel_auc = run_selective_prediction(yt_mc, ys_mc, unc_mc, coverage_ratio=0.8)
-            log.info(f"MC Utility -> ECE: {ece:.4f}, Err-Unc Corr: {corr:.4f}, Sel. AUC (top 80%): {sel_auc:.4f}")
+            sel_res = run_selective_prediction(yt_mc, ys_mc, unc_mc, coverage_ratio=0.8)
+            budget_res = calc_fixed_budget_utility(yt_mc, ys_mc, unc_mc, budget=50)
+            
+            log.info(f"MC Utility -> ECE: {ece:.4f}, Err-Unc Corr: {corr:.4f}")
+            log.info(f"Selective Prediction (top 80% coverage) -> ROC-AUC: {sel_res.get('roc_auc', 0):.4f}, F1: {sel_res.get('f1', 0):.4f}")
+            log.info(f"Fixed Budget Utility (Top 50) -> Precision Gain: {budget_res['precision_gain']:.4f} ({budget_res['std_precision']:.4f} -> {budget_res['filtered_precision']:.4f})")
 
     if "l1_l2" in active_stages and l1_model is not None:
         log.info("=" * 50)
@@ -164,12 +194,26 @@ def main():
         yt_mc, ys_mc, unc_mc, mc_cfg = evaluate_with_mc(l2_trainer.model, dataset, cfg, setting, stage="l2", l1_model=l1_model)
         if yt_mc is not None:
             res_mc = evaluate_benchmark(y_true=yt_mc, y_score=ys_mc, model_name="L1+L2-MC", setting=setting)
+            
+            if args.bootstrap:
+                from sklearn.metrics import roc_auc_score, average_precision_score
+                log.info("[MC Benchmark] Calculating CIs via bootstrapping...")
+                m_auc, l_auc, u_auc = calc_bootstrap_ci(yt_mc, ys_mc, roc_auc_score)
+                m_pr, l_pr, u_pr = calc_bootstrap_ci(yt_mc, ys_mc, average_precision_score)
+                res_mc["roc_auc_ci"] = (l_auc, u_auc)
+                res_mc["pr_auc_ci"] = (l_pr, u_pr)
+                log.info(f"L1+L2-MC ROC-AUC CI: [{l_auc:.4f}, {u_auc:.4f}]")
+
             table.add(res_mc)
             
             ece = calc_calibration_ece(yt_mc, ys_mc)
             corr = calc_uncertainty_correlation(yt_mc, ys_mc, unc_mc)
-            sel_auc = run_selective_prediction(yt_mc, ys_mc, unc_mc, coverage_ratio=0.8)
-            log.info(f"MC Utility -> ECE: {ece:.4f}, Err-Unc Corr: {corr:.4f}, Sel. AUC (top 80%): {sel_auc:.4f}")
+            sel_res = run_selective_prediction(yt_mc, ys_mc, unc_mc, coverage_ratio=0.8)
+            budget_res = calc_fixed_budget_utility(yt_mc, ys_mc, unc_mc, budget=50)
+            
+            log.info(f"MC Utility -> ECE: {ece:.4f}, Err-Unc Corr: {corr:.4f}")
+            log.info(f"Selective Prediction (top 80% coverage) -> ROC-AUC: {sel_res.get('roc_auc', 0):.4f}, F1: {sel_res.get('f1', 0):.4f}")
+            log.info(f"Fixed Budget Utility (Top 50) -> Precision Gain: {budget_res['precision_gain']:.4f} ({budget_res['std_precision']:.4f} -> {budget_res['filtered_precision']:.4f})")
 
     table.save_csv(output_dir / f"mc_benchmark_{chain}.csv")
     table.print_summary()
