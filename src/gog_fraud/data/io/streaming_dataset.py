@@ -39,18 +39,26 @@ class StreamingDataset(FraudDataset):
                 missing += 1
                 continue
             
-            # Read just the first row of the first CSV (which are sorted by block mostly)
-            # or scan all CSVs and find min timeStamp
+            # Read just the first row of all CSVs in the contract folder
             min_ts = float('inf')
             for csv_f in csv_files:
                 try:
                     df = pd.read_csv(csv_f, nrows=1)
-                    if 'timeStamp' in df.columns:
-                        ts = int(df['timeStamp'].iloc[0])
+                    # Normalize columns to lowercase for check
+                    cols_lower = [c.lower() for c in df.columns]
+                    
+                    if 'timestamp' in cols_lower:
+                        idx = cols_lower.index('timestamp')
+                        ts = int(df.iloc[0, idx])
                         min_ts = min(min_ts, ts)
-                    elif 'blockNumber' in df.columns: # Fallback to blockNumber
-                        blk = int(df['blockNumber'].iloc[0])
-                        min_ts = min(min_ts, blk) 
+                    elif 'block_number' in cols_lower:
+                        idx = cols_lower.index('block_number')
+                        blk = int(df.iloc[0, idx])
+                        min_ts = min(min_ts, blk)
+                    elif 'blocknumber' in cols_lower:
+                        idx = cols_lower.index('blocknumber')
+                        blk = int(df.iloc[0, idx])
+                        min_ts = min(min_ts, blk)
                 except Exception:
                     continue
             

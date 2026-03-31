@@ -140,6 +140,16 @@ def main():
     if args.max_samples and len(stream_g) > args.max_samples:
         log.info(f"[Streaming Replay] Subsetting stream_g to {args.max_samples} samples.")
         stream_g = stream_g[:args.max_samples]
+    
+    # Document Subset Range
+    if stream_g:
+        sample_ids = [getattr(g, 'contract_id', str(i)) for i, g in enumerate(stream_g)]
+        log.info(f"[Streaming Replay] Replay Subset: {len(stream_g)} contracts.")
+        # If dataset has stored timestamps, we can be more precise
+        if hasattr(dataset, 'contract_timestamps'):
+            sub_ts = [dataset.contract_timestamps[cid] for cid in dataset.labels.keys() if cid in sample_ids]
+            if sub_ts:
+                log.info(f"[Streaming Replay] Time Range: {min(sub_ts)} - {max(sub_ts)}")
 
     l1_cache_path = output_dir / f"l1_model_weights_{chain}.pt"
     
@@ -164,11 +174,17 @@ def main():
     
     # Triage Analysis
     from gog_fraud.evaluation.mc_metrics import calc_fixed_budget_utility
-    budget_res = calc_fixed_budget_utility(yt, ys, unc, budget=min(50, len(yt)))
-    log.info(f"Fixed Budget Triage (Top {budget_res['budget']}) -> Std Precision: {budget_res['std_precision']:.3f}, Filtered Precision: {budget_res['filtered_precision']:.3f}, Gain: {budget_res['precision_gain']:.3f}")
+    budget_50 = calc_fixed_budget_utility(yt, ys, unc, budget=min(50, len(yt)))
+    budget_1pct = calc_fixed_budget_utility(yt, ys, unc, budget=0.01)
+    budget_5pct = calc_fixed_budget_utility(yt, ys, unc, budget=0.05)
+    
+    log.info(f"Triage Utility (Top 50) -> Gain: {budget_50['precision_gain']:.4f} (Cov: {budget_50['coverage']:.2%})")
+    log.info(f"Triage Utility (Top 1%) -> Gain: {budget_1pct['precision_gain']:.4f} (Cov: {budget_1pct['coverage']:.2%})")
+    log.info(f"Triage Utility (Top 5%) -> Gain: {budget_5pct['precision_gain']:.4f} (Cov: {budget_5pct['coverage']:.2%})")
     
     res = evaluate_benchmark(y_true=yt, y_score=ys, model_name="L1-StreamMC", setting=setting)
-    res["triage_gain"] = budget_res["precision_gain"]
+    res["triage_gain_50"] = budget_50["precision_gain"]
+    res["triage_gain_5pct"] = budget_5pct["precision_gain"]
     
     table.add(res)
     table.save_csv(output_dir / f"streaming_results_{chain}.csv")

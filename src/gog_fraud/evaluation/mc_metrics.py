@@ -121,18 +121,24 @@ def calc_bootstrap_ci(y_true, y_score, metric_fn, n_bootstrap=100, ci=0.95):
 def calc_fixed_budget_utility(y_true, y_score, y_unc, budget=100):
     """
     Compare Top-N (budget) alerting strategies:
-    1. Standard: Top-N by raw score.
-    2. Filtered: Top-N by score after filtering out top 20% most uncertain cases.
+    - budget (int): absolute number of alerts
+    - budget (float): percentage of total samples [0, 1]
     """
     yt = _to_numpy_1d_int(y_true)
     ys = _to_numpy_1d_float(y_score)
     unc = _to_numpy_1d_float(y_unc)
+    n = len(yt)
+    
+    if isinstance(budget, float) and budget <= 1.0:
+        actual_budget = max(int(n * budget), 1)
+    else:
+        actual_budget = int(budget)
     
     # Strategy 1: Standard
     std_order = np.argsort(ys)[::-1]
-    std_top = std_order[:budget]
+    std_top = std_order[:actual_budget]
     std_hits = int(yt[std_top].sum())
-    std_precision = std_hits / budget
+    std_precision = std_hits / actual_budget
     
     # Strategy 2: Filtered (Excluding top 20% uncertainty)
     unc_threshold = np.percentile(unc, 80)
@@ -141,24 +147,30 @@ def calc_fixed_budget_utility(y_true, y_score, y_unc, budget=100):
     ys_filtered = ys[mask]
     yt_filtered = yt[mask]
     
-    if len(ys_filtered) < budget:
-        filtered_top = np.arange(len(ys_filtered))
-        actual_budget = len(ys_filtered)
+    if len(ys_filtered) < actual_budget:
+        budget_for_filtered = len(ys_filtered)
     else:
-        filtered_order = np.argsort(ys_filtered)[::-1]
-        filtered_top = filtered_order[:budget]
-        actual_budget = budget
+        budget_for_filtered = actual_budget
         
-    filtered_hits = int(yt_filtered[filtered_top].sum())
-    filtered_precision = filtered_hits / max(actual_budget, 1)
+    if budget_for_filtered > 0:
+        filtered_order = np.argsort(ys_filtered)[::-1]
+        filtered_top = filtered_order[:budget_for_filtered]
+        filtered_hits = int(yt_filtered[filtered_top].sum())
+        filtered_precision = filtered_hits / budget_for_filtered
+    else:
+        filtered_hits = 0
+        filtered_precision = 0.0
     
     return {
-        "budget": budget,
+        "budget_type": "relative" if isinstance(budget, float) else "absolute",
+        "budget_value": budget,
+        "actual_budget": actual_budget,
         "std_hits": std_hits,
         "std_precision": std_precision,
         "filtered_hits": filtered_hits,
         "filtered_precision": filtered_precision,
-        "precision_gain": filtered_precision - std_precision
+        "precision_gain": filtered_precision - std_precision,
+        "coverage": budget_for_filtered / n
     }
 
 def calc_abstention_cost(y_true, y_score, y_unc, uncertainty_threshold):

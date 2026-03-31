@@ -161,15 +161,16 @@ def main():
 
             table.add(res_mc)
             
-            # Additional MC Specific Metrics
-            ece = calc_calibration_ece(yt_mc, ys_mc)
-            corr = calc_uncertainty_correlation(yt_mc, ys_mc, unc_mc)
-            sel_res = run_selective_prediction(yt_mc, ys_mc, unc_mc, coverage_ratio=0.8)
-            budget_res = calc_fixed_budget_utility(yt_mc, ys_mc, unc_mc, budget=50)
+            # Triage Utility Reporting
+            budget_50 = calc_fixed_budget_utility(yt_mc, ys_mc, unc_mc, budget=50)
+            budget_1pct = calc_fixed_budget_utility(yt_mc, ys_mc, unc_mc, budget=0.01)
+            budget_5pct = calc_fixed_budget_utility(yt_mc, ys_mc, unc_mc, budget=0.05)
             
             log.info(f"MC Utility -> ECE: {ece:.4f}, Err-Unc Corr: {corr:.4f}")
             log.info(f"Selective Prediction (top 80% coverage) -> ROC-AUC: {sel_res.get('roc_auc', 0):.4f}, F1: {sel_res.get('f1', 0):.4f}")
-            log.info(f"Fixed Budget Utility (Top 50) -> Precision Gain: {budget_res['precision_gain']:.4f} ({budget_res['std_precision']:.4f} -> {budget_res['filtered_precision']:.4f})")
+            log.info(f"Triage Utility (Top 50) -> Gain: {budget_50['precision_gain']:.4f} (Cov: {budget_50['coverage']:.2%})")
+            log.info(f"Triage Utility (Top 1%) -> Gain: {budget_1pct['precision_gain']:.4f} (Cov: {budget_1pct['coverage']:.2%})")
+            log.info(f"Triage Utility (Top 5%) -> Gain: {budget_5pct['precision_gain']:.4f} (Cov: {budget_5pct['coverage']:.2%})")
 
     if "l1_l2" in active_stages and l1_model is not None:
         log.info("=" * 50)
@@ -206,14 +207,16 @@ def main():
 
             table.add(res_mc)
             
-            ece = calc_calibration_ece(yt_mc, ys_mc)
-            corr = calc_uncertainty_correlation(yt_mc, ys_mc, unc_mc)
-            sel_res = run_selective_prediction(yt_mc, ys_mc, unc_mc, coverage_ratio=0.8)
-            budget_res = calc_fixed_budget_utility(yt_mc, ys_mc, unc_mc, budget=50)
+            # Triage Utility Reporting
+            budget_50 = calc_fixed_budget_utility(yt_mc, ys_mc, unc_mc, budget=50)
+            budget_1pct = calc_fixed_budget_utility(yt_mc, ys_mc, unc_mc, budget=0.01)
+            budget_5pct = calc_fixed_budget_utility(yt_mc, ys_mc, unc_mc, budget=0.05)
             
             log.info(f"MC Utility -> ECE: {ece:.4f}, Err-Unc Corr: {corr:.4f}")
             log.info(f"Selective Prediction (top 80% coverage) -> ROC-AUC: {sel_res.get('roc_auc', 0):.4f}, F1: {sel_res.get('f1', 0):.4f}")
-            log.info(f"Fixed Budget Utility (Top 50) -> Precision Gain: {budget_res['precision_gain']:.4f} ({budget_res['std_precision']:.4f} -> {budget_res['filtered_precision']:.4f})")
+            log.info(f"Triage Utility (Top 50) -> Gain: {budget_50['precision_gain']:.4f} (Cov: {budget_50['coverage']:.2%})")
+            log.info(f"Triage Utility (Top 1%) -> Gain: {budget_1pct['precision_gain']:.4f} (Cov: {budget_1pct['coverage']:.2%})")
+            log.info(f"Triage Utility (Top 5%) -> Gain: {budget_5pct['precision_gain']:.4f} (Cov: {budget_5pct['coverage']:.2%})")
 
     table.save_csv(output_dir / f"mc_benchmark_{chain}.csv")
     table.print_summary()
