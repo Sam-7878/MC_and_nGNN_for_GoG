@@ -31,9 +31,15 @@ def evaluate_streaming(model, dataset, cfg, setting, train_g, stream_g, stage="l
     else:
         from gog_fraud.training.loops.level2 import _prepare_level2_loader
         loader_builder = _build_l2_dynamic_loader_builder(l1_model, cfg)
-        loader = _prepare_level2_loader(stream_g, split_name="test", batch_size=1, shuffle=False, 
-                                        label_dict=dataset.labels, global_graph=dataset.global_graph,
-                                        loader_builder=loader_builder)
+        loader = _prepare_level2_loader(
+            stream_g, 
+            split="test", 
+            batch_size=1, 
+            shuffle=False, 
+            label_dict=dataset.labels, 
+            global_graph=dataset.global_graph,
+            loader_builder=loader_builder
+        )
         
     mode = cfg.get("streaming", {}).get("mode", "virtual")
     duration = cfg.get("streaming", {}).get("compressed_duration_sec", 3600)

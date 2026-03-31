@@ -22,7 +22,7 @@ class StreamingDataset(FraudDataset):
         """
         log.info("[StreamingDataset] Scanning transaction timestamps for sorting ... This may take a moment.")
         
-        tx_dir = Path(transactions_root) / self.chain if self.chain else Path(transactions_root)
+        tx_dir = Path(transactions_root) / self.cfg.chain if self.cfg.chain else Path(transactions_root)
         
         contract_timestamps = {}
         missing = 0
@@ -76,10 +76,10 @@ class StreamingDataset(FraudDataset):
         log.info(f"[StreamingDataset] Chronological Split - Historical Context: {len(train_cids)}, Streaming Sequence: {len(stream_cids)}")
         
         # Assign back to the base datastructures dynamically
-        self.train_graphs = [g for g in self.tx_graphs if getattr(g, "contract_id", "") in train_cids]
+        self.train_graphs = [g for g in self.transaction_graphs if getattr(g, "contract_id", "") in train_cids]
         
         # In this dataset, the explicit streaming sequence retains chronological ordering
-        stream_unsorted = {getattr(g, "contract_id", ""): g for g in self.tx_graphs if getattr(g, "contract_id", "") in stream_cids}
+        stream_unsorted = {getattr(g, "contract_id", ""): g for g in self.transaction_graphs if getattr(g, "contract_id", "") in stream_cids}
         self.stream_graphs = [stream_unsorted[c] for c in self.chronological_order if c in stream_unsorted]
         
         return self.train_graphs, self.stream_graphs

@@ -32,9 +32,15 @@ def evaluate_with_mc(model, dataset, cfg, setting, stage="l1", l1_model=None):
         from gog_fraud.training.loops.level2 import _prepare_level2_loader
         train_g, valid_g, test_g = _get_split_graphs(dataset, cfg, setting)
         loader_builder = _build_l2_dynamic_loader_builder(l1_model, cfg)
-        loader = _prepare_level2_loader(test_g, split_name="test", batch_size=128, shuffle=False, 
-                                        label_dict=dataset.labels, global_graph=dataset.global_graph,
-                                        loader_builder=loader_builder)
+        loader = _prepare_level2_loader(
+            test_g, 
+            split="test", 
+            batch_size=128, 
+            shuffle=False, 
+            label_dict=dataset.labels, 
+            global_graph=dataset.global_graph,
+            loader_builder=loader_builder
+        )
         
     if loader is None:
         log.warning(f"[MC Benchmark] Empty loader for {stage}.")
