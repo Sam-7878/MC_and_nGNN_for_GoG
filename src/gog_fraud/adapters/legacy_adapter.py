@@ -33,17 +33,22 @@ class LegacyAdapterConfig:
     dropout: float = 0.0
 
     # Large Graph Partitioning Settings
-    max_nodes: int = 3000
+    max_nodes: int = 1500   ## 지금은 Sample size가 작아서 1500으로 설정했지만 나중에는 3000-5000으로 변경해야함
     large_graph_mode: str = "partition"  # "skip" | "partition"
-    partition_size: int = 3000
+    partition_size: int = 1500   ## 지금은 Sample size가 작아서 1500으로 설정했지만 나중에는 3000-5000으로 변경해야함
     partition_overlap: float = 0.0
     aggregation_method: str = "max"     # "max" | "topk_mean"
+    
+    # New: Auto-load best params if available
+    use_best_params: bool = False
+    best_params_dir: str = "configs/legacy/best_params/"
+    chain: str = "polygon"
 
     def __post_init__(self):
-        if self.agg_method and not self.score_reduce:
-            self.score_reduce = self.agg_method
-        elif self.agg_method:
-            self.score_reduce = self.agg_method
+        if self.aggregation_method and not self.score_reduce:
+            self.score_reduce = self.aggregation_method
+        elif self.aggregation_method:
+            self.score_reduce = self.aggregation_method
 
 # -----------------------------------------------------------------------------
 # Detector defaults
@@ -450,20 +455,55 @@ class LegacyBatchRunner:
         progress_every=6,
     ):
         if config is not None:
-            detector_overrides = getattr(config, "detector_overrides", detector_overrides)
-            score_reduce = getattr(config, "score_reduce", score_reduce)
-            progress_every = getattr(config, "progress_every", progress_every)
             self.config = config
+            if self.config.use_best_params:
+                self._apply_best_params()
         else:
             self.config = LegacyAdapterConfig(
                 detector_overrides=detector_overrides,
                 score_reduce=score_reduce,
                 progress_every=progress_every
             )
- 
-        self.detector_overrides = detector_overrides or {}
-        self.score_reduce = score_reduce or "mean"
-        self.progress_every = max(1, int(progress_every))
+
+        self.detector_overrides = self.config.detector_overrides or {}
+        self.score_reduce = self.config.score_reduce or "mean"
+        self.progress_every = max(1, int(self.config.progress_every))
+
+    def _apply_best_params(self):
+        """
+        Load best parameters from the configured directory based on the chain.
+        """
+        import json
+        import os
+        from pathlib import Path
+
+        # We assume the user has set the chain in some context, 
+        # or we try to detect it. For now, we expect it to be passed
+        # OR we rely on a global setting. 
+        # Let's add a `chain` field to LegacyAdapterConfig if not already there.
+        chain = getattr(self.config, "chain", "polygon").lower()
+        path = Path(self.config.best_params_dir) / f"best_params_{chain}.json"
+        
+        if path.exists():
+            try:
+                with open(path, 'r') as f:
+                    best_dict = json.load(f)
+                
+                # Merge into detector_overrides
+                if not self.config.detector_overrides:
+                    self.config.detector_overrides = {}
+                
+                for model_name, params in best_dict.items():
+                    key = str(model_name).upper()
+                    if key not in self.config.detector_overrides:
+                        self.config.detector_overrides[key] = {}
+                    self.config.detector_overrides[key].update(params)
+                
+                logger.info("[LegacyBatchRunner] Loaded best params for chain '%s' from %s", chain, path)
+            except Exception as e:
+                logger.error("[LegacyBatchRunner] Failed to load best params from %s: %r", path, e)
+        else:
+            logger.debug("[LegacyBatchRunner] No best params file found at %s", path)
         
 
     def _get_detector_kwargs(self, model_name: str) -> Dict[str, Any]:
