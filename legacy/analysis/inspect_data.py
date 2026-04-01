@@ -49,6 +49,6 @@ def inspect_csv_files(data_dir: Path, chain: str, num_samples: int = 3):
         print()
 
 # 실행
-data_dir = Path("../../_data/dataset/transactions")
+data_dir = Path("../../../_data/dataset/transactions")
 
 inspect_csv_files(data_dir, "bsc", num_samples=3)

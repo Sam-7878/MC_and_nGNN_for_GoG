@@ -7,7 +7,7 @@ import os
 from collections import defaultdict, Counter
 from pathlib import Path
 
-def analyze_gog_structure(data_dir="../../_data/GoG/polygon/graphs"):
+def analyze_gog_structure(data_dir="../../../_data/GoG/polygon/graphs"):
     """현재 GoG 데이터 구조 분석"""
     
     json_files = list(Path(data_dir).glob("*.json"))
@@ -125,7 +125,7 @@ if __name__ == "__main__":
     parser.add_argument('--chain', type=str, required=True)
     args = parser.parse_args()
 
-    result = analyze_gog_structure(f"../../_data/GoG/{args.chain}/graphs")
+    result = analyze_gog_structure(f"../../../_data/GoG/{args.chain}/graphs")
     
     print("\n" + "=" * 60)
     print("✅ Analysis Complete")

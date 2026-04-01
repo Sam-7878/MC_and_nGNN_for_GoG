@@ -548,8 +548,8 @@ def main():
     chain  = cli_args.chain
     device = cfg.device
 
-    file_path         = f'../../_data/GoG/{chain}/graphs'
-    global_edges_path = f'../../_data/GoG/edges/{chain}/{chain}_train_edges.txt'
+    file_path         = f'../../../_data/GoG/{chain}/graphs'
+    global_edges_path = f'../../../_data/GoG/edges/{chain}/{chain}_train_edges.txt'
 
     json_files = sorted(
         Path(file_path).glob('*.json'), key=lambda f: int(f.stem)
@@ -664,7 +664,7 @@ def main():
         'CoLA':       CoLA,
     }
 
-    RESULT_PATH    = f"../../_data/results/fraud_detection_mc"
+    RESULT_PATH    = f"../../../_data/results/fraud_detection_mc"
     checkpoint_dir = f"{RESULT_PATH}/checkpoints/{chain}"
     os.makedirs(RESULT_PATH, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)

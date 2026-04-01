@@ -203,7 +203,7 @@ if __name__ == "__main__":
     
     # Labels load & split
     print(f"Loading labels for {chain}...")
-    labels = pd.read_csv('../../_data/dataset/labels.csv').query('Chain == @chain')
+    labels = pd.read_csv('../../../_data/dataset/labels.csv').query('Chain == @chain')
     category_counts = labels['Category'].value_counts()
     select_class = list(category_counts.head(args.n_classes).index)
     category_to_label = {cat: i for i, cat in enumerate(select_class)}
@@ -224,7 +224,7 @@ if __name__ == "__main__":
         splits = [args.split]
     
     chain_indexes = {'bsc': 0, 'ethereum': 1, 'polygon': 2}
-    chain_dir = f'../../_data/dataset/transactions/{chain}'
+    chain_dir = f'../../../_data/dataset/transactions/{chain}'
     
     for split in splits:
         print(f"\n{'='*60}")
@@ -233,7 +233,7 @@ if __name__ == "__main__":
         labels_split = split_dfs[split]
         
         # 병렬 CSV 로드 (속도 10x↑)
-        cache_file = f'../../_data/dataset/.cache/{chain}_{split}_tx_cache.pkl'
+        cache_file = f'../../../_data/dataset/.cache/{chain}_{split}_tx_cache.pkl'
         if os.path.exists(cache_file):
             print("✅ Loading cached transaction data...")
             with open(cache_file, 'rb') as f:
@@ -266,7 +266,7 @@ if __name__ == "__main__":
         # Dataset 생성
         print(f"\n🔨 Building PyG dataset...")
         dataset = TransactionDataset(
-            root=f'../../_data/dataset/GCN/{chain}/{split}',
+            root=f'../../../_data/dataset/GCN/{chain}/{split}',
             transaction_dfs=transaction_dfs_valid,
             labels=labels_split.label.values.tolist(),
             contract_addresses=labels_split.Contract.values.tolist(),
@@ -280,7 +280,7 @@ if __name__ == "__main__":
         data_pt = torch.load(dataset.processed_paths[0])
         num_saved_graphs = len(data_pt[1]['x']) - 1  # slices에서 계산
         print(f"\n✅ {split} dataset complete: {num_saved_graphs} graphs")
-        print(f"   Saved to: ../../_data/dataset/GCN/{chain}/{split}/")
+        print(f"   Saved to: ../../../_data/dataset/GCN/{chain}/{split}/")
     
     print("\n" + "="*60)
     print("🎉 All datasets ready for Nested GNN + MC training!")

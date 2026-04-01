@@ -30,7 +30,7 @@ def hierarchical_graph_reader(path, label_path=None):
         labels_df = pd.read_csv(label_path)
         
         # 파일 경로에서 체인명(bsc, polygon 등) 자동 추출
-        # 예: path가 '../../_data/GoG/bsc/graphs' 라면 chain은 'bsc'
+        # 예: path가 '../../../_data/GoG/bsc/graphs' 라면 chain은 'bsc'
         chain_name = os.path.basename(os.path.dirname(path))
         
         if 'Chain' in labels_df.columns:

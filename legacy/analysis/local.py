@@ -15,9 +15,9 @@ warnings.filterwarnings("ignore")
 
 # ==================== Configuration ====================
 
-BASE_PATH = Path('../../_data/results/analysis/')
-IMAGE_PATH = Path('../../_data/results/analysis/images/')
-LABELS_PATH = Path('../../_data/dataset/labels.csv')
+BASE_PATH = Path('../../../_data/results/analysis/')
+IMAGE_PATH = Path('../../../_data/results/analysis/images/')
+LABELS_PATH = Path('../../../_data/dataset/labels.csv')
 
 # ✅ Category 매핑 (프로젝트에 맞게 수정 필요!)
 CATEGORY_MAPPING = {

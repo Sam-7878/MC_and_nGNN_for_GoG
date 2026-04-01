@@ -113,11 +113,11 @@ def main():
     args = get_args()
     chain = args.chain
     
-    filepath = f'../../_data/dataset/features/{chain}_basic_metrics_processed.csv'
+    filepath = f'../../../_data/dataset/features/{chain}_basic_metrics_processed.csv'
     y = load_labels(filepath)
     num_nodes = len(y)
     
-    embedding_path = f'../../_data/dataset/Deepwalk/{chain}'
+    embedding_path = f'../../../_data/dataset/Deepwalk/{chain}'
     
     # 미리 크기가 정해진 리스트 생성
     graph_embeddings = [None] * num_nodes
@@ -154,7 +154,7 @@ def main():
     print(f"Label vector shape: {y.shape}")
     # =========================================================================
 
-    hierarchical_graph = hierarchical_graph_reader(f'../../_data/GoG/{chain}/edges/global_edges.csv')
+    hierarchical_graph = hierarchical_graph_reader(f'../../../_data/GoG/{chain}/edges/global_edges.csv')
     edge_index = torch.LongTensor(list(hierarchical_graph.edges)).t().contiguous()
 
     # PyG 안정성을 위한 self-loop 추가 및 정렬
@@ -220,7 +220,7 @@ def main():
     results = []
     final_results = []
     
-    checkpoint_dir = f"../../_data/results/fraud_detection"
+    checkpoint_dir = f"../../../_data/results/fraud_detection"
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_file = f"{checkpoint_dir}/{chain}_main-deepwalk_checkpoint.json"
 
@@ -301,7 +301,7 @@ def main():
             # "Uncertainty": "N/A" # 베이스라인은 불확실성 지표가 없으므로 N/A 처리
         })
 
-    RESULT_PATH = f"../../_data/results/fraud_detection"
+    RESULT_PATH = f"../../../_data/results/fraud_detection"
     # 결과를 DataFrame으로 변환 후 CSV로 저장 (Batch Script 연동 목적)
     results_df = pd.DataFrame(results)
     final_results_df = pd.DataFrame(final_results)

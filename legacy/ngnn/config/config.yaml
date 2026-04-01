@@ -8,8 +8,8 @@ system:
   deterministic: true
 
 data:
-  data_dir: "../../_data/GoG/polygon/graphs"
-  contract_graph_path: "../../_data/GoG/polygon/polygon_hybrid_graph.pt"
+  data_dir: "../../../_data/GoG/polygon/graphs"
+  contract_graph_path: "../../../_data/GoG/polygon/polygon_hybrid_graph.pt"
 
   # train / val / test
   split_ratio: [0.7, 0.15, 0.15]

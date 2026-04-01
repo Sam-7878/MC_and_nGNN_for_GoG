@@ -13,8 +13,8 @@ from data.collate import hierarchical_collate_fn
 
  
 dataset = HierarchicalDataset(
-    data_dir="../../_data/GoG/polygon/graphs",
-    contract_graph_path="../../_data/GoG/polygon/polygon_hybrid_graph.pt",
+    data_dir="../../../_data/GoG/polygon/graphs",
+    contract_graph_path="../../../_data/GoG/polygon/polygon_hybrid_graph.pt",
     split="train",
     split_seed=42,
     edge_dropout=0.0,

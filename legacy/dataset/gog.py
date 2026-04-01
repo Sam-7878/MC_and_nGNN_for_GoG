@@ -270,12 +270,12 @@ def main():
     chain = args.chain
 
     labels_final = pd.read_csv(
-        f'../../_data/dataset/features/{chain}_basic_metrics_processed.csv'
+        f'../../../_data/dataset/features/{chain}_basic_metrics_processed.csv'
     )
     select_address = labels_final.Contract.tolist()
 
     contract_mapping_file = (
-        f'../../_data/graphs/{chain}/'
+        f'../../../_data/graphs/{chain}/'
         f'{chain}_common_nodes_except_null_labels.csv'
     )
     global_graph = pd.read_csv(contract_mapping_file)
@@ -287,8 +287,8 @@ def main():
     global_graph_select['graph_1'] = global_graph_select['Contract1'].map(all_address_index)
     global_graph_select['graph_2'] = global_graph_select['Contract2'].map(all_address_index)
 
-    chain_dir = f'../../_data/dataset/transactions/{chain}'
-    directory = f'../../_data/GoG/{chain}'
+    chain_dir = f'../../../_data/dataset/transactions/{chain}'
+    directory = f'../../../_data/GoG/{chain}'
     os.makedirs(f'{directory}/edges',  exist_ok=True)
     os.makedirs(f'{directory}/graphs', exist_ok=True)
 

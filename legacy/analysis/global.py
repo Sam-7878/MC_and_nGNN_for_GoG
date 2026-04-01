@@ -39,7 +39,7 @@ chain = args.chain
 
 
 print(f'Loading labels for {chain}...')
-labels = pd.read_csv(f'../../_data/dataset/labels.csv')
+labels = pd.read_csv(f'../../../_data/dataset/labels.csv')
 chain_labels = labels.query('Chain == @chain')
 print(f'Found {len(chain_labels)} labels for {chain}')
 
@@ -59,7 +59,7 @@ else:
 
 print('Loading global_link...')
 global_link = pd.read_csv(
-    f'../../_data/graphs/{chain}/{chain}_common_nodes_except_null_labels.csv',
+    f'../../../_data/graphs/{chain}/{chain}_common_nodes_except_null_labels.csv',
     dtype={'Common_Nodes': 'int64', 'Unique_Addresses': 'int64'}
 )
 
@@ -88,7 +88,7 @@ args = parser.parse_args()
 chain = args.chain.lower()  # 'BSC' -> 'bsc' (데이터셋 기준)
 
 print(f'Loading labels for {chain}...')
-labels_path = f'../../_data/dataset/labels.csv'
+labels_path = f'../../../_data/dataset/labels.csv'
 if not os.path.exists(labels_path):
     raise FileNotFoundError(f"labels.csv not found: {labels_path}")
 
@@ -107,7 +107,7 @@ if chain_labels.empty:
 class_mapping = dict(zip(chain_labels['Contract'], chain_labels['Category']))
 
 print('Loading global_link...')
-global_link_path = f'../../_data/graphs/{chain}/{chain}_common_nodes_except_null_labels.csv'
+global_link_path = f'../../../_data/graphs/{chain}/{chain}_common_nodes_except_null_labels.csv'
 if not os.path.exists(global_link_path):
     raise FileNotFoundError(f"Global link CSV not found: {global_link_path}")
 global_link = pd.read_csv(
@@ -159,8 +159,8 @@ print(f"Common_Nodes sample (for centrality): {global_graph.es['common_nodes'][:
 
 
 # Tx counts (병렬 처리)
-cache_file = f'../../_data/dataset/.cache/{chain}_tx_counts.pkl'
-chain_dir = f'../../_data/dataset/transactions/{chain}'
+cache_file = f'../../../_data/dataset/.cache/{chain}_tx_counts.pkl'
+chain_dir = f'../../../_data/dataset/transactions/{chain}'
 
 def count_tx(addr, chain_dir):
     try:
@@ -271,10 +271,10 @@ plt.scatter(unweighted_degree, weighted_degree_common, alpha=0.5)  # ✅ common_
 plt.xlabel('Unweighted Degree')
 plt.ylabel('Weighted Degree (Common Nodes)')
 plt.title(f'{chain.upper()}: Degree Centrality')
-os.makedirs('../../_data/results/analysis/images', exist_ok=True)
-plt.savefig(f'../../_data/results/analysis/images/{chain}_degree_scatter.png', dpi=300, bbox_inches='tight')
+os.makedirs('../../../_data/results/analysis/images', exist_ok=True)
+plt.savefig(f'../../../_data/results/analysis/images/{chain}_degree_scatter.png', dpi=300, bbox_inches='tight')
 plt.close()
-print(f"Plot saved: ../../_data/results/analysis/images/{chain}_degree_scatter.png")
+print(f"Plot saved: ../../../_data/results/analysis/images/{chain}_degree_scatter.png")
 
 
 
@@ -285,9 +285,9 @@ plt.hist(edge_weights_common, bins=50, edgecolor='black', alpha=0.7)
 plt.xlabel('Common Nodes (Edge Weight)')
 plt.ylabel('Frequency')
 plt.title(f'{chain.upper()}: Edge Weights Distribution')
-plt.savefig(f'../../_data/results/analysis/images/{chain}_edge_weights.png', dpi=300, bbox_inches='tight')
+plt.savefig(f'../../../_data/results/analysis/images/{chain}_edge_weights.png', dpi=300, bbox_inches='tight')
 plt.close()
-print(f"Plot saved: ../../_data/results/analysis/images/{chain}_edge_weights.png")
+print(f"Plot saved: ../../../_data/results/analysis/images/{chain}_edge_weights.png")
 
 
 
@@ -315,7 +315,7 @@ print(f"  P95 risk: {mc_risk['p95_risk']}")
 print(f"  Top 5 risk nodes: {mc_risk['top_risk_nodes']}")
 
 # Cache graph
-graph_cache = f'../../_data/graphs/{chain}_global_graph.graphml'
+graph_cache = f'../../../_data/graphs/{chain}_global_graph.graphml'
 global_graph.write_graphml(graph_cache)
 print(f"Graph cached to {graph_cache}")
 

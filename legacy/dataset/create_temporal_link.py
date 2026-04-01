@@ -63,8 +63,8 @@ def generate_train_test_data(edges_with_timestamps_sorted, chain):
     test_negative_edges = generate_negative_samples(all_nodes_list, test_existing_edges, len(test_data))
 
     # Save train and test edges with labels
-    train_path = f'../../_data/GoG/edges/{chain}/{chain}_train_edges.txt'
-    test_path = f'../../_data/GoG/edges/{chain}/{chain}_test_edges.txt'
+    train_path = f'../../../_data/GoG/edges/{chain}/{chain}_train_edges.txt'
+    test_path = f'../../../_data/GoG/edges/{chain}/{chain}_test_edges.txt'
     
     with open(train_path, 'w') as f:
         for edge in train_data[['graph_1', 'graph_2']].itertuples(index=False):
@@ -88,7 +88,7 @@ def get_args():
 def fetch_min_timestamp(args):
     """병렬 처리를 위한 헬퍼 함수: 필요한 timestamp 컬럼만 읽어 메모리를 최소화합니다."""
     chain, addr = args
-    file_path = f'../../_data/dataset/transactions/{chain}/{addr}.csv'
+    file_path = f'../../../_data/dataset/transactions/{chain}/{addr}.csv'
     try:
         # 파일 전체가 아닌 'timestamp' 컬럼 하나만 읽어서 즉시 메모리 해제
         tx = pd.read_csv(file_path, usecols=['timestamp'])
@@ -100,9 +100,9 @@ def main():
     args = get_args()
     chain = str(args.chain)
 
-    os.makedirs(os.path.dirname(f'../../_data/GoG/edges/{chain}/'), exist_ok=True)
+    os.makedirs(os.path.dirname(f'../../../_data/GoG/edges/{chain}/'), exist_ok=True)
 
-    chain_labels = pd.read_csv(f'../../_data/dataset/labels.csv').query('Chain == @chain')
+    chain_labels = pd.read_csv(f'../../../_data/dataset/labels.csv').query('Chain == @chain')
     chain_class = list(chain_labels.Contract.values)
 
     # 1. 병렬 처리 및 메모리 최소화 로딩
@@ -126,7 +126,7 @@ def main():
     del chain_labels
     gc.collect()
 
-    edges = pd.read_csv(f'../../_data/GoG/{chain}/edges/global_edges.csv')
+    edges = pd.read_csv(f'../../../_data/GoG/{chain}/edges/global_edges.csv')
     edges_with_timestamps_sorted = process_data(chain, timestamps, index_mapping, edges)
 
     # 더 이상 필요 없는 데이터프레임 해제

@@ -346,7 +346,7 @@ def main():
                        help='Use fast mode (10x faster, approximated centrality)')
     args = parser.parse_args()
     
-    data_dir = f'../../_data/GoG/{args.chain}/graphs'
+    data_dir = f'../../../_data/GoG/{args.chain}/graphs'
     
     if not os.path.exists(data_dir):
         print(f"❌ Directory not found: {data_dir}")

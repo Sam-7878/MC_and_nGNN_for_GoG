@@ -62,7 +62,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     chain = args.chain  
-    GRAPHS_DIR = f"../../_data/GoG/{chain}/graphs"
+    GRAPHS_DIR = f"../../../_data/GoG/{chain}/graphs"
   
     json_files = list(Path(GRAPHS_DIR).glob("*.json"))
     print(f"Found {len(json_files)} JSON files in {GRAPHS_DIR}")

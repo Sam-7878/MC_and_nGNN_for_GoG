@@ -13,8 +13,8 @@ def get_args():
 args = get_args()
 chain = args.chain
 
-BASE_PATH = Path('../../_data/results/analysis/')
-IMAGE_PATH = Path('../../_data/results/analysis/images/')
+BASE_PATH = Path('../../../_data/results/analysis/')
+IMAGE_PATH = Path('../../../_data/results/analysis/images/')
 
 df = pd.read_csv(BASE_PATH / f'{chain}_snap_metrics_labels.csv')
 

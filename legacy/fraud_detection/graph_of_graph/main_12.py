@@ -33,15 +33,15 @@ Example
 -------
 python ./graph_of_graph/main.py \
   --chain bsc \
-  --embedding_csv ../../_data/dataset/graph_individual_artifacts/bsc/bsc_graph_embeddings_deepwalk.csv \
-  --edge_csv ../../_data/level2/bsc_gog_edges.csv \
-  --label_csv ../../_data/dataset/features/bsc_basic_metrics_processed.csv \
+  --embedding_csv ../../../_data/dataset/graph_individual_artifacts/bsc/bsc_graph_embeddings_deepwalk.csv \
+  --edge_csv ../../../_data/level2/bsc_gog_edges.csv \
+  --label_csv ../../../_data/dataset/features/bsc_basic_metrics_processed.csv \
   --graph_id_col graph_id \
   --label_col label \
   --undirected \
   --use_precomputed_split \
   --use_level1_prob \
-  --summary_csv ../../_data/dataset/graph_individual_artifacts/bsc/graph_level1_deepwalk_summary.csv \
+  --summary_csv ../../../_data/dataset/graph_individual_artifacts/bsc/graph_level1_deepwalk_summary.csv \
   --use_summary_features \
   --gnn_hidden 128 \
   --gnn_out 64 \
@@ -51,7 +51,7 @@ python ./graph_of_graph/main.py \
   --lr 1e-3 \
   --weight_decay 1e-4 \
   --patience 30 \
-  --artifacts_dir ../../_data/dataset/graph_of_graph_artifacts
+  --artifacts_dir ../../../_data/dataset/graph_of_graph_artifacts
 """
 
 import os

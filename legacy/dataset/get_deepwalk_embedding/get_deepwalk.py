@@ -94,13 +94,13 @@ def process_graph(idx, edges, embedding_dim, seed, save_dir):
 
 def worker_process(args):
     idx, embedding_dim, chain, seed = args
-    output_dir = f'../../_data/dataset/Deepwalk/{chain}/'
+    output_dir = f'../../../_data/dataset/Deepwalk/{chain}/'
     
     # 1. 이어하기: 이미 생성된 파일은 즉시 패스
     if os.path.exists(f'{output_dir}/{idx}.npy'):
         return
     
-    graph_path = f"../../_data/GoG/{chain}/graphs/{idx}.json"
+    graph_path = f"../../../_data/GoG/{chain}/graphs/{idx}.json"
     if not os.path.exists(graph_path):
         return
         
@@ -120,8 +120,8 @@ def main():
     args = parameter_parser()
     seed_everything(args.seed)
     
-    graphs_directory = Path(f"../../_data/GoG/{args.chain}/graphs/")
-    output_dir = f'../../_data/dataset/Deepwalk/{args.chain}/'
+    graphs_directory = Path(f"../../../_data/GoG/{args.chain}/graphs/")
+    output_dir = f'../../../_data/dataset/Deepwalk/{args.chain}/'
     os.makedirs(output_dir, exist_ok=True)
 
     # 전체 데이터 개수를 JSON 파일 개수로 파악 (데이터를 메모리에 올리지 않음)

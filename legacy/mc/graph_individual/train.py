@@ -177,7 +177,7 @@ def main():
     print(f"Device: {device}")
 
     # 데이터셋 경로 (individual.py에서 생성한 경로)
-    data_root = f'../../_data/dataset/GCN/{args.chain}'
+    data_root = f'../../../_data/dataset/GCN/{args.chain}'
     
     print("📂 Loading datasets...")
     train_dataset = TransactionDataset(root=f'{data_root}/train', split='train')
@@ -246,7 +246,7 @@ def main():
     patience_counter = 0
     patience_limit = 20
     
-    model_save_path = f'../../_data/GoG/{args.chain}/best_model_pyg_{args.chain}.pt'
+    model_save_path = f'../../../_data/GoG/{args.chain}/best_model_pyg_{args.chain}.pt'
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
 
     print("\n🔥 Starting Training Loop...")

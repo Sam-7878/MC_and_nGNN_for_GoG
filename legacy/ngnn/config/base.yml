@@ -29,7 +29,7 @@ data:
   split_seed: 42
 
 paths:
-  data_dir: "../../_data/GoG/{chain}/local_graphs"
-  contract_graph: "../../_data/GoG/{chain}/{chain}_hybrid_graph.pt"
-  model_save: "../../_data/models/ngnn_{chain}_{phase}.pt"
-  result_dir: "../../_data/results/fraud_detection_ngnn"
+  data_dir: "../../../_data/GoG/{chain}/local_graphs"
+  contract_graph: "../../../_data/GoG/{chain}/{chain}_hybrid_graph.pt"
+  model_save: "../../../_data/models/ngnn_{chain}_{phase}.pt"
+  result_dir: "../../../_data/results/fraud_detection_ngnn"

@@ -107,7 +107,7 @@ def process_single_contract(addr, chain, end_date, sample_size=100, debug=False)
     """
     try:
         # 1. 데이터 로드
-        file_path = f'../../_data/dataset/transactions/{chain}/{addr}.csv'
+        file_path = f'../../../_data/dataset/transactions/{chain}/{addr}.csv'
         
         if not os.path.exists(file_path):
             if debug:
@@ -254,7 +254,7 @@ Examples:
     end_date = pd.Timestamp(args.end_date)
     
     # 출력 디렉토리 생성
-    output_dir = '../../_data/results/analysis'
+    output_dir = '../../../_data/results/analysis'
     os.makedirs(output_dir, exist_ok=True)
     
     # 결과 파일명
@@ -276,7 +276,7 @@ Examples:
     
     # 1. 레이블 로드
     try:
-        labels_df = pd.read_csv('../../_data/dataset/labels.csv')
+        labels_df = pd.read_csv('../../../_data/dataset/labels.csv')
         chain_labels = labels_df.query('Chain == @args.chain')
         contracts = list(chain_labels['Contract'].values)
         
@@ -286,7 +286,7 @@ Examples:
         logger.info(f"Total contracts to process: {len(contracts)}")
         
     except FileNotFoundError:
-        logger.error("Labels file not found: ../../_data/dataset/labels.csv")
+        logger.error("Labels file not found: ../../../_data/dataset/labels.csv")
         return
     
     # 2. 체크포인트 로드

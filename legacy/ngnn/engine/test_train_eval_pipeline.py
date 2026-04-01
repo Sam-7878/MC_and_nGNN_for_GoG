@@ -28,18 +28,18 @@ def main():
     # Dataset
     # ------------------------------------------------------------------
     train_ds = HierarchicalDataset(
-        data_dir="../../_data/GoG/polygon/graphs",
-        contract_graph_path="../../_data/GoG/polygon/polygon_hybrid_graph.pt",
+        data_dir="../../../_data/GoG/polygon/graphs",
+        contract_graph_path="../../../_data/GoG/polygon/polygon_hybrid_graph.pt",
         split="train",
     )
     val_ds = HierarchicalDataset(
-        data_dir="../../_data/GoG/polygon/graphs",
-        contract_graph_path="../../_data/GoG/polygon/polygon_hybrid_graph.pt",
+        data_dir="../../../_data/GoG/polygon/graphs",
+        contract_graph_path="../../../_data/GoG/polygon/polygon_hybrid_graph.pt",
         split="val",
     )
     test_ds = HierarchicalDataset(
-        data_dir="../../_data/GoG/polygon/graphs",
-        contract_graph_path="../../_data/GoG/polygon/polygon_hybrid_graph.pt",
+        data_dir="../../../_data/GoG/polygon/graphs",
+        contract_graph_path="../../../_data/GoG/polygon/polygon_hybrid_graph.pt",
         split="test",
     )
 

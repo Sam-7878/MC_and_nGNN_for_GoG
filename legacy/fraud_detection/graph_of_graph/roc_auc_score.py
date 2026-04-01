@@ -123,7 +123,7 @@ def main():
     # =========================================================================
     # 메모리 최적화: GraphDatasetGenerator 대신 JSON 초경량 파싱 (Lazy Loading) 적용
     # =========================================================================
-    graphs_dir = Path(f"../../_data/GoG/{chain}/graphs/")
+    graphs_dir = Path(f"../../../_data/GoG/{chain}/graphs/")
     num_nodes = len(list(graphs_dir.glob("*.json")))
     
     x_list = []
@@ -143,7 +143,7 @@ def main():
     # =========================================================================
 
     hierarchical_graph = hierarchical_graph_reader(
-        f"../../_data/GoG/{chain}/edges/global_edges.csv"
+        f"../../../_data/GoG/{chain}/edges/global_edges.csv"
     )
 
     edge_index = torch.LongTensor(list(hierarchical_graph.edges)).t().contiguous()
@@ -219,7 +219,7 @@ def main():
     results = []
     final_results = []
     
-    checkpoint_dir = f"../../_data/results/fraud_detection"
+    checkpoint_dir = f"../../../_data/results/fraud_detection"
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_file = f"{checkpoint_dir}/{chain}_roc-auc_checkpoint.json"
 
@@ -347,7 +347,7 @@ def main():
     results_df = pd.DataFrame(results)
     final_results_df = pd.DataFrame(final_results)
 
-    RESULT_PATH = f"../../_data/results/fraud_detection"
+    RESULT_PATH = f"../../../_data/results/fraud_detection"
     os.makedirs(RESULT_PATH, exist_ok=True)
     csv_path = f"{RESULT_PATH}/roc-auc-results_{chain}_log.csv"
     results_df.to_csv(csv_path, index=False)

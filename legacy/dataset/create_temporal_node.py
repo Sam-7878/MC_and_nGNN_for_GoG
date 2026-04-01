@@ -18,7 +18,7 @@ def main():
     args = get_args()
     chain = str(args.chain)
 
-    labels = pd.read_csv('../../_data/dataset/labels.csv').query('Chain == @chain')
+    labels = pd.read_csv('../../../_data/dataset/labels.csv').query('Chain == @chain')
 
     # Use three-class as an example.
     n = 3
@@ -33,7 +33,7 @@ def main():
     # create timestamps
     stats = []
     for addr in labels_select_df.Contract.values:
-        tx = pd.read_csv(f'../../_data/dataset/transactions/{chain}/{addr}.csv')
+        tx = pd.read_csv(f'../../../_data/dataset/transactions/{chain}/{addr}.csv')
         first_timestamp = tx['timestamp'].min()
         stats.append({'address': addr, 'first_timestamp': first_timestamp})
         
@@ -52,7 +52,7 @@ def main():
     train_index = list(timestamps['addr_index'].values)[:train_num]
     test_index = list(timestamps['addr_index'].values)[train_num:]
 
-    NODES_PATH = f'../../_data/GoG/nodes/{chain}'
+    NODES_PATH = f'../../../_data/GoG/nodes/{chain}'
     os.makedirs(os.path.dirname(NODES_PATH), exist_ok=True)
 
     file_name = f'{NODES_PATH}/{chain}_train_index_{n}.txt'

@@ -11,8 +11,8 @@ sys.path.append(str(ROOT))
 from data.dataset import HierarchicalDataset
 
 dataset = HierarchicalDataset(
-    data_dir="../../_data/GoG/polygon/graphs",
-    contract_graph_path="../../_data/GoG/polygon/polygon_hybrid_graph.pt",
+    data_dir="../../../_data/GoG/polygon/graphs",
+    contract_graph_path="../../../_data/GoG/polygon/polygon_hybrid_graph.pt",
     split="train",
 )
 

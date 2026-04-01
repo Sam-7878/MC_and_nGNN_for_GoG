@@ -557,9 +557,9 @@ def main():
     chain = cli_args.chain
     cfg   = Args()
 
-    file_path         = f'../../_data/GoG/{chain}/graphs'
+    file_path         = f'../../../_data/GoG/{chain}/graphs'
     global_edges_path = (
-        f'../../_data/GoG/edges/{chain}/{chain}_train_edges.txt'
+        f'../../../_data/GoG/edges/{chain}/{chain}_train_edges.txt'
     )
 
     # ── JSON 병렬 로드 ─────────────────────────────────────────────────────
@@ -680,7 +680,7 @@ def main():
 
     seeds_for_evaluation = [42, 100, 2026]
 
-    RESULT_PATH    = f"../../_data/results/fraud_detection_mc"
+    RESULT_PATH    = f"../../../_data/results/fraud_detection_mc"
     checkpoint_dir = f"{RESULT_PATH}/checkpoints/{chain}"
     os.makedirs(RESULT_PATH, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)

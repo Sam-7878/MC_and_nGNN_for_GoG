@@ -85,7 +85,7 @@ if __name__ == "__main__":
     args = get_args()
     chain = str(args.chain)
     
-    root_path = f'../../_data/GoG/edges/{chain}'
+    root_path = f'../../../_data/GoG/edges/{chain}'
 
     train_data = TransactionEdgeDataset(root=root_path, chain=chain, use_train=True)
     test_data = TransactionEdgeDataset(root=root_path, chain=chain, use_train=False)

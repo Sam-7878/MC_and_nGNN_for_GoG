@@ -146,7 +146,7 @@ def process_file_wrapper(file_path, skip_diameter, max_nodes_for_diameter, debug
 def main():
     parser = argparse.ArgumentParser(description='Calculate Hybrid Graph Properties (NetworkX + SNAP)')
     parser.add_argument('--data_dir', type=str, default='', help='Directory containing graph csv files')
-    parser.add_argument('--output_dir', type=str, default='../../_data/results/analysis', help='Directory to save results')
+    parser.add_argument('--output_dir', type=str, default='../../../_data/results/analysis', help='Directory to save results')
     parser.add_argument('--chain', type=str, required=True, help='Chain name for output file')
     parser.add_argument('--limit', type=int, default=None, help='Limit number of files for testing')
     parser.add_argument('--skip-diameter', action='store_true', help='Skip diameter calculation')
@@ -157,7 +157,7 @@ def main():
     args = parser.parse_args()
     
     if args.data_dir == '':
-        args.data_dir = f'../../_data/dataset/transactions/{args.chain}'
+        args.data_dir = f'../../../_data/dataset/transactions/{args.chain}'
     
     if args.debug:
         logger.setLevel(logging.DEBUG)

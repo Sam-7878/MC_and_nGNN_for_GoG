@@ -107,7 +107,7 @@ def main():
     args = get_args()
     chain = args.chain
     
-    graphs_dir = Path(f"../../_data/GoG/{chain}/graphs/")
+    graphs_dir = Path(f"../../../_data/GoG/{chain}/graphs/")
     json_files = list(graphs_dir.glob("*.json"))
     num_nodes = len(json_files)
     
@@ -128,7 +128,7 @@ def main():
     features  = torch.tensor(x_list, dtype=torch.float)
     labels = torch.tensor(y_list, dtype=torch.long)
     
-    hierarchical_graph = hierarchical_graph_reader(f"../../_data/GoG/{chain}/edges/global_edges.csv")
+    hierarchical_graph = hierarchical_graph_reader(f"../../../_data/GoG/{chain}/edges/global_edges.csv")
     edge_index = torch.LongTensor(list(hierarchical_graph.edges)).t().contiguous()
 
     self_loops = torch.arange(num_nodes, dtype=torch.long)
@@ -190,7 +190,7 @@ def main():
     results = []
     final_results = []
     
-    checkpoint_dir = f"../../_data/results/fraud_detection"
+    checkpoint_dir = f"../../../_data/results/fraud_detection"
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_file = f"{checkpoint_dir}/{chain}_main_checkpoint.json"
 
@@ -296,7 +296,7 @@ def main():
                 torch.cuda.empty_cache()
 
 
-    RESULT_PATH = f"../../_data/results/fraud_detection"
+    RESULT_PATH = f"../../../_data/results/fraud_detection"
     # 결과를 DataFrame으로 변환 후 CSV로 저장 (Batch Script 연동 목적)
     results_df = pd.DataFrame(results)
     final_results_df = pd.DataFrame(final_results)
