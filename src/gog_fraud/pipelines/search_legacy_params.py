@@ -10,12 +10,20 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 
-import torch
-import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from gog_fraud.adapters.legacy_adapter import LegacyAdapterConfig, LegacyBatchRunner
+from gog_fraud.adapters.legacy_adapter import (
+    LegacyAdapterConfig, 
+    LegacyBatchRunner, 
+    LegacyEvalItem,
+    _unwrap_data, 
+    _extract_contract_id, 
+    _extract_label, 
+    _prepare_graph_for_detector,
+    _get_partition_cache_path,
+    _partition_graph
+)
 from gog_fraud.data.io.dataset import FraudDataset, DatasetConfig
 from gog_fraud.evaluation.benchmark import evaluate_benchmark
 
@@ -34,11 +42,16 @@ gpu_semaphore = None
 global_valid_graphs = None
 global_labels_dict = None
 
-def init_worker(sema, valid_graphs, labels_dict):
+def init_worker(sema, eval_items, labels_dict):
     global gpu_semaphore, global_valid_graphs, global_labels_dict
     gpu_semaphore = sema
-    global_valid_graphs = valid_graphs
+    global_valid_graphs = eval_items
     global_labels_dict = labels_dict
+    
+    # Delayed internal imports to avoid parent state contamination
+    import torch
+    import pygod
+    torch.set_num_threads(1)  # Limit CPU thread bloat per worker
 
 def _run_single_config(
     chain: str,
@@ -54,6 +67,7 @@ def _run_single_config(
         if gpu_semaphore:
             gpu_semaphore.acquire()
             
+        import torch
         # 전역 GPU 캐시 정리
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -65,9 +79,8 @@ def _run_single_config(
         )
         runner = LegacyBatchRunner(config=config)
         
-        # 1. 모델 실행
-        # (LegacyBatchRunner 이미 internal gc/cuda clean함)
-        output = runner.run_detector(model_name, global_valid_graphs)
+        # 1. 모델 실행 (이미 전처리된 아이템 사용)
+        output = runner.run_on_items(model_name, global_valid_graphs)
         
         if not output.records:
             return {"error": "no_records"}
@@ -108,10 +121,64 @@ def _run_single_config(
             gpu_semaphore.release()
         gc.collect()
 
+def _pre_partition_graphs(graphs, labels_dict, adapter_cfg: Dict[str, Any], chain: str) -> List[LegacyEvalItem]:
+    import torch
+    logger.info("Pre-partitioning %d graphs for chain %s...", len(graphs), chain)
+    eval_items = []
+    
+    max_nodes = adapter_cfg.get("max_nodes", 1500)
+    p_size = adapter_cfg.get("partition_size", 1500)
+    p_overlap = adapter_cfg.get("partition_overlap", 0.0)
+    cache_dir = adapter_cfg.get("partition_cache_dir", "../_data/dataset/.cache/partitioned_graphs/")
+
+    for idx, item in enumerate(tqdm(graphs, desc="Pre-partitioning")):
+        data = _unwrap_data(item)
+        contract_id = _extract_contract_id(item, data, idx)
+        label = labels_dict.get(contract_id)
+        
+        if data is None:
+            continue
+            
+        num_nodes = getattr(data, 'num_nodes', None)
+        if num_nodes is None and getattr(data, 'x', None) is not None:
+            num_nodes = data.x.size(0)
+            
+        is_large = (num_nodes is not None and num_nodes > max_nodes)
+        
+        eval_item = LegacyEvalItem(contract_id=contract_id, label=label, is_large=is_large)
+        
+        if is_large:
+            # Check cache
+            cp = _get_partition_cache_path(cache_dir, chain, contract_id, p_size, p_overlap)
+            if cp.exists():
+                try:
+                    eval_item.subgraphs = torch.load(cp, weights_only=False)
+                except:
+                    eval_item.subgraphs = _partition_graph(data, p_size, p_overlap)
+            else:
+                eval_item.subgraphs = _partition_graph(data, p_size, p_overlap)
+                try:
+                    torch.save(eval_item.subgraphs, cp)
+                except:
+                    pass
+        else:
+            eval_item.data = _prepare_graph_for_detector(data)
+            # Ensure num_nodes is explicitly set even for small graphs
+            eval_item.data.num_nodes = eval_item.data.x.size(0)
+            
+        eval_items.append(eval_item)
+        
+    return eval_items
+
 def perform_search():
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
+        
     parser = argparse.ArgumentParser()
-    parser.add_argument("--chains", type=str, default="bsc,ethereum,polygon")
-    parser.add_argument("--workers", type=int, default=12)
+    parser.add_argument("--chains", type=str, default="polygon,bsc,ethereum")
+    parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--gpu_limit", type=int, default=1)
     parser.add_argument("--out_dir", type=str, default="docs/work_reports/legacy_param_search/")
     parser.add_argument("--coarse", action="store_true", help="Run a coarse grid first")
@@ -204,6 +271,9 @@ def perform_search():
                 logger.warning(f"No validation graphs for {chain}. Skipping.")
                 continue
                 
+            # 최적화: 모델 루프 실행 전 전체 데이터를 한 번만 전처리(파티셔닝 등) 함
+            eval_items = _pre_partition_graphs(valid_graphs, labels_dict, adapter_base_cfg, chain)
+            
         except Exception as e:
             logger.error(f"Failed to load dataset for {chain}: {e}")
             continue
@@ -239,7 +309,8 @@ def perform_search():
             with ProcessPoolExecutor(
                 max_workers=args.workers, 
                 initializer=init_worker, 
-                initargs=(sema, valid_graphs, labels_dict)
+                initargs=(sema, eval_items, labels_dict),
+                mp_context=multiprocessing.get_context('spawn')
             ) as executor:
                 futures = {
                     executor.submit(

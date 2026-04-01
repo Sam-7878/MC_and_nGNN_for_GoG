@@ -44,6 +44,10 @@ class LegacyAdapterConfig:
     best_params_dir: str = "configs/legacy/best_params/"
     chain: str = "polygon"
 
+    # Partition Caching
+    partition_cache_dir: str = "../_data/dataset/.cache/partitioned_graphs/"
+    cleanup_partition_cache: bool = False
+
     def __post_init__(self):
         if self.aggregation_method and not self.score_reduce:
             self.score_reduce = self.aggregation_method
@@ -133,6 +137,7 @@ def _prepare_graph_for_detector(data: Data) -> Data:
 
     data.x = data.x.float()
     data.edge_index = data.edge_index.long()
+    data.num_nodes = data.x.size(0)  # Explicitly set to avoid inference errors
     return data
 
 
@@ -142,14 +147,11 @@ def _repackage_minimal(data: Data) -> Data:
     """
     clean_data = Data(
         x=data.x.float(),
-        edge_index=data.edge_index.long()
+        edge_index=data.edge_index.long(),
+        num_nodes=data.x.size(0)
     )
     if hasattr(data, "y") and data.y is not None:
         clean_data.y = data.y
-    
-    if hasattr(data, "num_nodes"):
-        clean_data.num_nodes = data.num_nodes
-    else:
         clean_data.num_nodes = data.x.size(0)
         
     return clean_data
@@ -391,6 +393,15 @@ class LegacyRecord:
 
 
 @dataclass
+class LegacyEvalItem:
+    contract_id: str
+    label: Optional[float]
+    data: Optional[Data] = None  # Full graph
+    subgraphs: Optional[List[Data]] = None  # Partitioned subgraphs
+    is_large: bool = False
+
+
+@dataclass
 class LegacyRunOutput:
     model_name: str
     records: List[LegacyRecord]
@@ -436,6 +447,22 @@ class LegacyRunOutput:
 # -----------------------------------------------------------------------------
 # Main runner
 # -----------------------------------------------------------------------------
+def _get_partition_cache_path(
+    base_dir: str,
+    chain: str,
+    contract_id: str,
+    size: int,
+    overlap: float,
+) -> Path:
+    from pathlib import Path
+    d = Path(base_dir) / chain
+    d.mkdir(parents=True, exist_ok=True)
+    
+    # Sanitize contract_id for filename
+    safe_id = str(contract_id).replace("/", "_").replace("\\", "_")
+    return d / f"{safe_id}_s{size}_o{overlap}.pt"
+
+
 class LegacyBatchRunner:
     """
     Run PyGOD-style legacy detectors graph-by-graph.
@@ -664,6 +691,15 @@ class LegacyBatchRunner:
 
         logger.info("")
         logger.info("[LegacyBatchRunner] === Running %s (total=%d) ===", model_name, total)
+        
+        # Optional cache cleanup if requested
+        if self.config.cleanup_partition_cache:
+            import shutil
+            cache_root = Path(self.config.partition_cache_dir) / self.config.chain
+            if cache_root.exists():
+                logger.info("[LegacyBatchRunner] Cleaning up partition cache for chain '%s'...", self.config.chain)
+                shutil.rmtree(cache_root)
+            cache_root.mkdir(parents=True, exist_ok=True)
 
         output = LegacyRunOutput(
             model_name=str(model_name),
@@ -678,7 +714,8 @@ class LegacyBatchRunner:
         )
 
         for idx, item in enumerate(items):
-            if idx % self.progress_every == 0:
+            # Progress update every 10 graphs for better diagnostic visibility
+            if idx % 10 == 0 or idx == total - 1:
                 pct = int((100.0 * idx / total)) if total > 0 else 100
                 logger.info("[LegacyRunner:%s] %d/%d (%d%%)", model_name, idx, total, pct)
 
@@ -746,6 +783,102 @@ class LegacyBatchRunner:
         )
         return output
 
+    def run_on_items(
+        self,
+        model_name: str,
+        eval_items: List[LegacyEvalItem],
+    ) -> LegacyRunOutput:
+        """
+        Run evaluating on pre-processed items to skip all partitioning/unwrap logic.
+        Used for fast hyperparameter search.
+        """
+        total = len(eval_items)
+        output = LegacyRunOutput(
+            model_name=str(model_name),
+            records=[],
+            skipped=0,
+            processed_total=total,
+            full_graph_count=0,
+            partitioned_graph_count=0,
+            partition_size_dist=[],
+            failure_reasons={},
+            skipped_labels=[]
+        )
+
+        for idx, item in enumerate(eval_items):
+            if idx % 50 == 0 or idx == total - 1:
+                pct = int((100.0 * idx / total)) if total > 0 else 100
+                logger.info("[LegacyRunner:%s] %d/%d (%d%%)", model_name, idx, total, pct)
+
+            try:
+                if item.is_large and item.subgraphs:
+                    record = self._run_partitioned_direct(model_name, item.subgraphs, item.contract_id, item.label)
+                    if record:
+                        output.records.append(record)
+                        output.partitioned_graph_count += 1
+                    else:
+                        output.skipped += 1
+                elif item.data:
+                    record = self._run_single_graph_full(model_name, item.data, item.contract_id, item.label)
+                    if record:
+                        output.records.append(record)
+                        output.full_graph_count += 1
+                    else:
+                        output.skipped += 1
+                else:
+                    output.skipped += 1
+            except Exception as e:
+                logger.warning("[LegacyRunner:%s] Eval item error: %r", model_name, e)
+                print(f"idx={idx} contract_id={item.contract_id} label={item.label} data={item.data}, is_large={item.is_large}")
+                output.skipped += 1
+
+        return output
+
+    def _run_partitioned_direct(self, model_name: str, subgraphs: List[Data], contract_id: str, label: Optional[float]) -> Optional[LegacyRecord]:
+        import gc
+        import torch
+        all_node_scores = []
+        
+        for i, sub_data in enumerate(subgraphs):
+            detector = None
+            try:
+                detector = _build_detector(
+                    model_name=model_name,
+                    detector_kwargs=self._get_detector_kwargs(model_name),
+                )
+                detector.fit(sub_data)
+                scores, _ = _extract_detector_scores(detector, sub_data)
+                if scores is not None:
+                    all_node_scores.append(scores.detach().cpu())
+            except Exception as exc:
+                logger.debug("[LegacyRunner:%s] Partition %d failed for %s: %r", model_name, i, contract_id, exc)
+            finally:
+                if detector is not None: del detector
+                gc.collect()
+                if torch.cuda.is_available(): torch.cuda.empty_cache()
+        
+        if not all_node_scores:
+            return None
+            
+        combined_scores = torch.cat(all_node_scores, dim=0)
+        agg_method = self.config.aggregation_method.lower()
+        if agg_method == "max":
+            final_score = float(combined_scores.max().item())
+        elif agg_method == "topk_mean":
+            k = min(self.config.topk, int(combined_scores.numel()))
+            final_score = float(torch.topk(combined_scores, k=k).values.mean().item())
+        else:
+            final_score = float(combined_scores.mean().item())
+            
+        return LegacyRecord(
+            model_name=str(model_name),
+            contract_id=contract_id,
+            score=final_score,
+            label=label,
+            score_source=f"pre_partitioned_{agg_method}",
+            num_scores=int(combined_scores.numel()),
+        )
+
     def _run_single_graph_full(self, model_name: str, data: Data, contract_id: str, label: Optional[float]) -> Optional[LegacyRecord]:
         import gc
         detector = None
@@ -782,12 +915,38 @@ class LegacyBatchRunner:
 
     def _run_partitioned(self, model_name: str, data: Data, contract_id: str, label: Optional[float]) -> Optional[LegacyRecord]:
         import gc
-        subgraphs = _partition_graph(data, self.config.partition_size, self.config.partition_overlap)
-        print(f"[LegacyRunner:%s] %s split into %d subgraphs", model_name, contract_id, len(subgraphs))
+        import torch
+        from pathlib import Path
+        
+        # 1. Check/Load from cache
+        cache_path = _get_partition_cache_path(
+            base_dir=self.config.partition_cache_dir,
+            chain=self.config.chain,
+            contract_id=contract_id,
+            size=self.config.partition_size,
+            overlap=self.config.partition_overlap
+        )
+        
+        subgraphs = None
+        if cache_path.exists():
+            try:
+                subgraphs = torch.load(cache_path, weights_only=False)
+                logger.debug("[LegacyRunner:%s] Cache Hit for %s: %d subgraphs loaded.", model_name, contract_id, len(subgraphs))
+            except Exception as e:
+                logger.warning("[LegacyRunner:%s] Failed to load partition cache for %s: %r", model_name, contract_id, e)
+                
+        # 2. Partition if cache miss
+        if subgraphs is None:
+            subgraphs = _partition_graph(data, self.config.partition_size, self.config.partition_overlap)
+            logger.info("[LegacyRunner:%s] Cache Initialized for %s: %d subgraphs generated.", model_name, contract_id, len(subgraphs))
+            try:
+                torch.save(subgraphs, cache_path)
+            except Exception as e:
+                logger.warning("[LegacyRunner:%s] Failed to save partition cache for %s: %r", model_name, contract_id, e)
         
         all_node_scores = []
         
-        logger.info("[LegacyRunner:%s] %s split into %d subgraphs", model_name, contract_id, len(subgraphs))
+        logger.debug("[LegacyRunner:%s] %s split into %d subgraphs", model_name, contract_id, len(subgraphs))
         
         for i, sub_data in enumerate(subgraphs):
             detector = None

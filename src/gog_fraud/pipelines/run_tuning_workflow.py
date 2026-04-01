@@ -31,7 +31,7 @@ def run_workflow():
     p1_cmd = [
         py_exec, "src/gog_fraud/pipelines/search_legacy_params.py",
         "--chains", "bsc,ethereum,polygon",
-        "--workers", "12",
+        "--workers", "8",
         "--gpu_limit", "1",
         "--coarse",
         "--out_dir", p1_dir
@@ -53,7 +53,7 @@ def run_workflow():
         p2_cmd = [
             py_exec, "src/gog_fraud/pipelines/search_legacy_params.py",
             "--chains", chain,
-            "--workers", "12",
+            "--workers", "8",
             "--gpu_limit", "1",
             "--refine_from", str(p1_best_file),
             "--out_dir", p2_dir
