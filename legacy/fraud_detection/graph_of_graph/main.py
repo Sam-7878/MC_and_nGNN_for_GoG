@@ -142,13 +142,24 @@ def main():
     global_data.val_mask = val_mask
     global_data.test_mask = test_mask
 
-    model_params = {
-        "DOMINANT":     [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
-        "DONE":         [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
-        "GAE":          [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
-        "AnomalyDAE":   [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
-        "CoLA":         [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
-    }
+    model_params = {}
+
+    if chain == 'ethereum' :
+        model_params = {
+            "DOMINANT":     [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16] for lr in [0.003, 0.005, 0.01, 0.02] for e in [20, 30, 40, 60]],
+            "DONE":         [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16] for lr in [0.003, 0.005, 0.01, 0.02] for e in [20, 30, 40, 60]],
+            "GAE":          [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16] for lr in [0.003, 0.005, 0.01, 0.02] for e in [20, 30, 40, 60]],
+            "AnomalyDAE":   [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16] for lr in [0.003, 0.005, 0.01, 0.02] for e in [20, 30, 40, 60]],
+            "CoLA":         [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16] for lr in [0.003, 0.005, 0.01, 0.02] for e in [20, 30, 40, 60]],
+        }
+    else :
+        model_params = {
+            "DOMINANT":     [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
+            "DONE":         [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
+            "GAE":          [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
+            "AnomalyDAE":   [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
+            "CoLA":         [{"hid_dim": d, "lr": lr, "epoch": e} for d in [4, 8, 12, 16, 20] for lr in [0.003, 0.005, 0.007, 0.01, 0.015, 0.02, 0.03] for e in [20, 30, 40, 50, 80, 100, 120]],
+        }
 
     MODEL_MAP = {
         "DOMINANT": DOMINANT,
@@ -165,21 +176,22 @@ def main():
         # batch_size를 적용해서 메모리 사용량을 줄이는 대신, epoch 수를 늘려서 충분히 학습할 수 있도록 합니다.
         if args.chain == 'ethereum' :
             return ModelCls(
-                hid_dim=param["hid_dim"],
-                num_layers=2,
-                epoch=param["epoch"],
-                lr=param["lr"],
-                gpu=args.device,
-                batch_size=2048,        # Ethereum은 BSC보다 그래프가 크므로 배치 사이즈를 2048로 설정합니다.
-                num_neigh=12            # first layer는 최대 12개의 이웃, second layer는 최대 12개의 이웃을 샘플링하여 메모리 사용량을 줄입니다.
+                hid_dim     =param["hid_dim"],
+                num_layers  =2,
+                epoch       =param["epoch"],
+                lr          =param["lr"],
+                gpu         =args.device,
+                batch_size  =2048,        # Ethereum은 BSC보다 그래프가 크므로 배치 사이즈를 2048로 설정합니다.
+                num_neigh   =24 if (model_name == "DOMINANT" or model_name == "DONE") else 64           
+                # first layer는 최대 48개의 이웃, second layer는 최대 48개의 이웃을 샘플링하여 메모리 사용량을 줄입니다.
             )
         else :
             return ModelCls(
-                hid_dim=param["hid_dim"],
-                num_layers=2,
-                epoch=param["epoch"],
-                lr=param["lr"],
-                gpu=args.device,
+                hid_dim     =param["hid_dim"],
+                num_layers  =2,
+                epoch       =param["epoch"],
+                lr          =param["lr"],
+                gpu         =args.device,
             )
 
     seed_for_param_selection = 42

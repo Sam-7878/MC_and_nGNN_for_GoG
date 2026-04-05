@@ -122,14 +122,14 @@ def main():
         print(f"[ERROR] 디렉터리가 아닙니다: {root}", file=sys.stderr)
         sys.exit(1)
 
-    extensions = {".py", ".yaml"}
+    extensions = {".py", ".yaml", ".md", ".json", ".sh", ".txt", ".ts", ".tsx", ".jsx", ".java", ".go", ".cpp", ".c", ".h", ".rb", ".php", ".rs", ".html", ".htm", ".css", ".scss", ".less", ".xml", ".yml"}
     files = collect_target_files(root, extensions)
 
     total_lines = 0
 
     if not args.summary_only:
         print(f"대상 폴더: {root}")
-        print("집계 대상 확장자: .py, .yaml")
+        print("집계 대상 확장자: .py, .yaml, .md, .json, .sh, .txt, .ts, .tsx, .jsx, .java, .go, .cpp, .c, .h, .rb, .php, .rs, .html, .htm, .css, .scss, .less, .xml, .yml")
         print("적용된 필터: .gitignore 규칙 반영")
         print("-" * 60)
 
