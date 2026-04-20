@@ -94,6 +94,11 @@ class BenchmarkResult:
     num_neg: int = 0
     num_dropped: int = 0
 
+    # ─── Resource Telemetry ──────────────────────────────
+    max_nodes_processed: int = 0
+    peak_ram_mb: float = 0.0
+    peak_gpu_mb: float = 0.0
+
     # ─── Bootstrap confidence intervals ──────────────────
     ci_roc_auc: Optional[Tuple[float, float]] = None
     ci_pr_auc: Optional[Tuple[float, float]] = None
@@ -459,6 +464,9 @@ def evaluate_benchmark(
     bootstrap_alpha: float = 0.05,
     missing_score: float = 0.0,
     drop_missing: bool = False,
+    max_nodes_processed: int = 0,
+    peak_ram_mb: float = 0.0,
+    peak_gpu_mb: float = 0.0,
 ) -> BenchmarkResult:
     """
     평가 메인 함수.
@@ -587,6 +595,9 @@ def evaluate_benchmark(
         num_pos=num_pos,
         num_neg=num_neg,
         num_dropped=dropped,
+        max_nodes_processed=max_nodes_processed,
+        peak_ram_mb=peak_ram_mb,
+        peak_gpu_mb=peak_gpu_mb,
         ci_roc_auc=ci_roc_auc,
         ci_pr_auc=ci_pr_auc,
     )

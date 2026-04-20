@@ -414,6 +414,11 @@ class LegacyRunOutput:
     partition_size_dist: List[int] = None
     failure_reasons: Dict[str, int] = None
     skipped_labels: List[float] = None
+    
+    # Resource metrics
+    max_nodes_processed: int = 0
+    peak_ram_mb: float = 0.0
+    peak_gpu_mb: float = 0.0
 
     def __post_init__(self):
         if self.partition_size_dist is None: self.partition_size_dist = []
@@ -441,6 +446,9 @@ class LegacyRunOutput:
             "score_sources": [r.score_source for r in self.records],
             "num_scores_each": [r.num_scores for r in self.records],
             "skipped": self.skipped,
+            "max_nodes_processed": self.max_nodes_processed,
+            "peak_ram_mb": self.peak_ram_mb,
+            "peak_gpu_mb": self.peak_gpu_mb,
         }
 
 
@@ -811,7 +819,21 @@ class LegacyBatchRunner:
                 logger.info("[LegacyRunner:%s] %d/%d (%d%%)", model_name, idx, total, pct)
 
             try:
+                import torch
+                import psutil
+                process = psutil.Process()
+                
+                # Pre-run tracking
+                if torch.cuda.is_available():
+                    torch.cuda.reset_peak_memory_stats()
+                start_ram = process.memory_info().rss / (1024 * 1024)
+
                 if item.is_large and item.subgraphs:
+                    # nodes in a subgraph might be limited to partition_size, but the logical size is the sum or original max
+                    num_nodes = item.subgraphs[0].num_nodes * len(item.subgraphs) if item.subgraphs else 0
+                    if num_nodes > output.max_nodes_processed:
+                        output.max_nodes_processed = num_nodes
+                        
                     record = self._run_partitioned_direct(model_name, item.subgraphs, item.contract_id, item.label)
                     if record:
                         output.records.append(record)
@@ -819,6 +841,10 @@ class LegacyBatchRunner:
                     else:
                         output.skipped += 1
                 elif item.data:
+                    num_nodes = item.data.num_nodes if hasattr(item.data, "num_nodes") else item.data.x.size(0)
+                    if num_nodes > output.max_nodes_processed:
+                        output.max_nodes_processed = num_nodes
+
                     record = self._run_single_graph_full(model_name, item.data, item.contract_id, item.label)
                     if record:
                         output.records.append(record)
@@ -827,6 +853,16 @@ class LegacyBatchRunner:
                         output.skipped += 1
                 else:
                     output.skipped += 1
+                    
+                # Post-run tracking
+                end_ram = process.memory_info().rss / (1024 * 1024)
+                if end_ram > output.peak_ram_mb:
+                    output.peak_ram_mb = end_ram
+                if torch.cuda.is_available():
+                    peak_gpu = torch.cuda.max_memory_allocated() / (1024 * 1024)
+                    if peak_gpu > output.peak_gpu_mb:
+                        output.peak_gpu_mb = peak_gpu
+                        
             except Exception as e:
                 logger.warning("[LegacyRunner:%s] Eval item error: %r", model_name, e)
                 print(f"idx={idx} contract_id={item.contract_id} label={item.label} data={item.data}, is_large={item.is_large}")

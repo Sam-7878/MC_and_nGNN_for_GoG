@@ -790,6 +790,9 @@ def run_legacy_baselines(
                 threshold=float(_cfg_get(cfg, "threshold", 0.5)),
                 k_list=_cfg_get(cfg, "k_list", [10, 20, 50]),
                 bootstrap=bool(_cfg_get(cfg, "bootstrap", True)),
+                max_nodes_processed=run_output.max_nodes_processed,
+                peak_ram_mb=run_output.peak_ram_mb,
+                peak_gpu_mb=run_output.peak_gpu_mb,
             )
             table.add(result)
             log.info(str(result))
