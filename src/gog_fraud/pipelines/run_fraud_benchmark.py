@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 import yaml
+import psutil
 
 from gog_fraud.adapters.legacy_adapter import LegacyAdapterConfig, LegacyBatchRunner
 from gog_fraud.data.io.dataset import FraudDataset
@@ -197,11 +198,24 @@ def _build_level1_trainer(cfg: dict) -> "Level1Trainer":
     )
     
     model = Level1Model.from_config(model_cfg)
+    
+    # Detect CUDA error state and fall back to CPU if needed
+    requested_device = cfg.get("device", "cuda")
+    if requested_device == "cuda" and torch.cuda.is_available():
+        try:
+            torch.zeros(1).cuda()  # Probe: will raise if CUDA context is corrupted
+        except RuntimeError as e:
+            log.warning(
+                f"[Benchmark] CUDA unavailable (possibly corrupted by Legacy stage): {e}. "
+                "Falling back to CPU for Revision models."
+            )
+            requested_device = "cpu"
+
     return Level1Trainer(
         model=model,
         cfg=_nested_get(cfg, "training", "level1") or _nested_get(cfg, "trainer", "level1") or cfg,
         optimizer=_build_optimizer(model, l1_cfg),
-        device=cfg.get("device", "cuda"),
+        device=requested_device,
     )
 
 
@@ -234,12 +248,24 @@ def _build_level2_trainer(cfg: dict, l1_model=None) -> "Level2Trainer":
     model = Level2Model.from_config(model_cfg)
     
     cfg_obj = _nested_get(cfg, "training", "level2") or _nested_get(cfg, "trainer", "level2") or cfg
-    
+
+    # Detect CUDA error state and fall back to CPU if needed
+    requested_device = cfg.get("device", "cuda")
+    if requested_device == "cuda" and torch.cuda.is_available():
+        try:
+            torch.zeros(1).cuda()  # Probe: will raise if CUDA context is corrupted
+        except RuntimeError as e:
+            log.warning(
+                f"[Benchmark] CUDA unavailable for L2 trainer: {e}. "
+                "Falling back to CPU."
+            )
+            requested_device = "cpu"
+
     return Level2Trainer(
         model=model,
         optimizer=_build_optimizer(model, l2_cfg),
         cfg=cfg_obj,
-        device=cfg.get("device", "cuda"),
+        device=requested_device,
     )
 
 
@@ -721,6 +747,10 @@ def run_legacy_baselines(
     model_names = _cfg_get(legacy_cfg, "models", ["DOMINANT", "DONE", "GAE", "AnomalyDAE", "CoLA"],)
     model_type = model_names[0] if model_names else "DOMINANT" # 기본값 설정, 기존 legacy에서는 model_names가 아니라 model_type이었음
 
+    # Extract chain name from main cfg -> dataset -> chain
+    dataset_cfg = _cfg_get(cfg, "dataset", {}) or {}
+    chain_name = dataset_cfg.get("chain", "polygon").lower()
+
     base_adapter_cfg    = LegacyAdapterConfig(
         agg_method      = _cfg_get(legacy_cfg, "agg_method", "max"),
         topk            = int(_cfg_get(legacy_cfg, "topk", 3)),
@@ -730,6 +760,8 @@ def run_legacy_baselines(
         num_layers      = int(_cfg_get(legacy_cfg, "num_layers", 2)),
         epoch           = int(_cfg_get(legacy_cfg, "epoch", 100)),
         lr              = float(_cfg_get(legacy_cfg, "lr", 0.003)),
+        use_best_params = True,
+        chain           = chain_name
     )
 
     # ==================================================
@@ -839,10 +871,35 @@ def run_revision_l1(dataset, cfg, table, setting):
         log.error(f"[Revision L1] fit failed: {e}", exc_info=True)
         raise
  
+    # Resource Tracking
+    import psutil
+    process = psutil.Process()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+    
+    # Calculate Max Nodes
+    max_nodes = 0
+    for g in test_graphs:
+        n = g.graph.num_nodes if hasattr(g, "graph") else g.num_nodes
+        if n > max_nodes: max_nodes = n
+
     # 평가
     metrics, yt, ys = trainer.evaluate(test_graphs, label_dict=dataset.labels, return_preds=True)
+    
+    # Capture Peak Metrics
+    peak_ram = process.memory_info().rss / (1024 * 1024)
+    peak_gpu = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+
     from gog_fraud.evaluation.benchmark import evaluate_benchmark
-    res = evaluate_benchmark(y_true=yt, y_score=ys, model_name="Revision-L1", setting=setting)
+    res = evaluate_benchmark(
+        y_true=yt, 
+        y_score=ys, 
+        model_name="Revision-L1", 
+        setting=setting,
+        max_nodes_processed=max_nodes,
+        peak_ram_mb=peak_ram,
+        peak_gpu_mb=peak_gpu
+    )
     if hasattr(table, "add"):
         table.add(res)
     return metrics
@@ -885,6 +942,17 @@ def run_revision_l1_l2(dataset, cfg, table, setting):
         loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg),
     )
  
+    # Resource Tracking
+    process = psutil.Process()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
+    # Calculate Max Nodes
+    max_nodes = 0
+    for g in test_graphs:
+        n = g.num_nodes if hasattr(g, "num_nodes") else (g.graph.num_nodes if hasattr(g, "graph") else 0)
+        if n > max_nodes: max_nodes = n
+
     metrics, yt, ys = l2_trainer.evaluate(
         test_graphs, 
         label_dict=dataset.labels,
@@ -892,8 +960,21 @@ def run_revision_l1_l2(dataset, cfg, table, setting):
         loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg),
         return_preds=True
     )
+
+    # Capture Peak Metrics
+    peak_ram = process.memory_info().rss / (1024 * 1024)
+    peak_gpu = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+
     from gog_fraud.evaluation.benchmark import evaluate_benchmark
-    res = evaluate_benchmark(y_true=yt, y_score=ys, model_name="Revision-L1+L2", setting=setting)
+    res = evaluate_benchmark(
+        y_true=yt, 
+        y_score=ys, 
+        model_name="Revision-L1+L2", 
+        setting=setting,
+        max_nodes_processed=max_nodes,
+        peak_ram_mb=peak_ram,
+        peak_gpu_mb=peak_gpu
+    )
     if hasattr(table, "add"):
         table.add(res)
     return metrics
@@ -940,6 +1021,17 @@ def run_revision_full(dataset, cfg, table, setting):
         loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg),
     )
  
+    # Resource Tracking
+    process = psutil.Process()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
+    # Calculate Max Nodes
+    max_nodes = 0
+    for g in test_graphs:
+        n = g.num_nodes if hasattr(g, "num_nodes") else (g.graph.num_nodes if hasattr(g, "graph") else 0)
+        if n > max_nodes: max_nodes = n
+
     metrics, yt, ys = l2_trainer.evaluate(
         test_graphs,
         label_dict=dataset.labels,
@@ -947,8 +1039,21 @@ def run_revision_full(dataset, cfg, table, setting):
         loader_builder=_build_l2_dynamic_loader_builder(l1_trainer.model, cfg),
         return_preds=True
     )
+
+    # Capture Peak Metrics
+    peak_ram = process.memory_info().rss / (1024 * 1024)
+    peak_gpu = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+
     from gog_fraud.evaluation.benchmark import evaluate_benchmark
-    res = evaluate_benchmark(y_true=yt, y_score=ys, model_name="Revision-Full", setting=setting)
+    res = evaluate_benchmark(
+        y_true=yt, 
+        y_score=ys, 
+        model_name="Revision-Full", 
+        setting=setting,
+        max_nodes_processed=max_nodes,
+        peak_ram_mb=peak_ram,
+        peak_gpu_mb=peak_gpu
+    )
     if hasattr(table, "add"):
         table.add(res)
     return metrics
@@ -1148,6 +1253,14 @@ def main():
         except Exception:
             log.exception("[Benchmark] Legacy baselines failed")
 
+    # Clean up GPU state after Legacy stage to prevent CUDA context contamination
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        except Exception:
+            pass  # Ignore if CUDA is already in bad state
+
     # =====================================================================
     l1_cache_path = output_dir / "l1_model_weights.pt"
     l1_model = None
@@ -1172,8 +1285,26 @@ def main():
             backend = cfg.get("level1", {}).get("encoder_backend", "gnn").upper()
             m_name = f"Revision-L1-{backend}" if backend != "GNN" else "Revision-L1"
             
+            # Resource Tracking
+            process_l1 = psutil.Process()
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
+            max_nodes_l1 = max(
+                (g.graph.num_nodes if hasattr(g, "graph") else g.num_nodes)
+                for g in test_g
+            ) if test_g else 0
+
             metrics, yt, ys = trainer.evaluate(test_g, label_dict=dataset.labels, return_preds=True)
-            res = evaluate_benchmark(y_true=yt, y_score=ys, model_name=m_name, setting=setting)
+
+            peak_ram_l1 = process_l1.memory_info().rss / (1024 * 1024)
+            peak_gpu_l1 = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+
+            res = evaluate_benchmark(
+                y_true=yt, y_score=ys, model_name=m_name, setting=setting,
+                max_nodes_processed=max_nodes_l1,
+                peak_ram_mb=peak_ram_l1,
+                peak_gpu_mb=peak_gpu_l1,
+            )
             table.add(res)
             _best_effort_save_table(table, output_dir, chain=chain)
 
@@ -1216,6 +1347,15 @@ def main():
                     loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg)
                 )
 
+                # Resource Tracking
+                process_l1l2 = psutil.Process()
+                if torch.cuda.is_available():
+                    torch.cuda.reset_peak_memory_stats()
+                max_nodes_l1l2 = max(
+                    (g.num_nodes if hasattr(g, "num_nodes") else g.graph.num_nodes)
+                    for g in test_g
+                ) if test_g else 0
+
                 metrics, yt, ys = l2_trainer.evaluate(
                     test_g,
                     label_dict=dataset.labels,
@@ -1226,7 +1366,15 @@ def main():
                 backend = cfg.get("level1", {}).get("encoder_backend", "gnn").upper()
                 m_name = f"Revision-L1+L2-{backend}" if backend != "GNN" else "Revision-L1+L2"
 
-                res = evaluate_benchmark(y_true=yt, y_score=ys, model_name=m_name, setting=setting)
+                peak_ram_l1l2 = process_l1l2.memory_info().rss / (1024 * 1024)
+                peak_gpu_l1l2 = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+
+                res = evaluate_benchmark(
+                    y_true=yt, y_score=ys, model_name=m_name, setting=setting,
+                    max_nodes_processed=max_nodes_l1l2,
+                    peak_ram_mb=peak_ram_l1l2,
+                    peak_gpu_mb=peak_gpu_l1l2,
+                )
                 table.add(res)
                 _best_effort_save_table(table, output_dir, chain=chain)
 
@@ -1258,6 +1406,15 @@ def main():
                     loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg)
                 )
 
+                # Resource Tracking
+                process_full = psutil.Process()
+                if torch.cuda.is_available():
+                    torch.cuda.reset_peak_memory_stats()
+                max_nodes_full = max(
+                    (g.num_nodes if hasattr(g, "num_nodes") else g.graph.num_nodes)
+                    for g in test_g
+                ) if test_g else 0
+
                 metrics, yt, ys = l2_trainer.evaluate(
                     test_g,
                     label_dict=dataset.labels,
@@ -1268,7 +1425,15 @@ def main():
                 backend = cfg.get("level1", {}).get("encoder_backend", "gnn").upper()
                 m_name = f"Revision-Full-{backend}" if backend != "GNN" else "Revision-Full"
 
-                res = evaluate_benchmark(y_true=yt, y_score=ys, model_name=m_name, setting=setting)
+                peak_ram_full = process_full.memory_info().rss / (1024 * 1024)
+                peak_gpu_full = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+
+                res = evaluate_benchmark(
+                    y_true=yt, y_score=ys, model_name=m_name, setting=setting,
+                    max_nodes_processed=max_nodes_full,
+                    peak_ram_mb=peak_ram_full,
+                    peak_gpu_mb=peak_gpu_full,
+                )
                 table.add(res)
                 _best_effort_save_table(table, output_dir, chain=chain)
 

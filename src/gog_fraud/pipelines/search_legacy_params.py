@@ -126,8 +126,8 @@ def _pre_partition_graphs(graphs, labels_dict, adapter_cfg: Dict[str, Any], chai
     logger.info("Pre-partitioning %d graphs for chain %s...", len(graphs), chain)
     eval_items = []
     
-    max_nodes = adapter_cfg.get("max_nodes", 1500)
-    p_size = adapter_cfg.get("partition_size", 1500)
+    max_nodes = adapter_cfg.get("max_nodes", 4096)
+    p_size = adapter_cfg.get("partition_size", 4096)
     p_overlap = adapter_cfg.get("partition_overlap", 0.0)
     cache_dir = adapter_cfg.get("partition_cache_dir", "../_data/dataset/.cache/partitioned_graphs/")
 
@@ -244,8 +244,8 @@ def perform_search():
     
     # Adapter 공통 설정 (Partition 등)
     adapter_base_cfg = {
-        "max_nodes": 1500,
-        "partition_size": 1500,
+        "max_nodes": 4096,
+        "partition_size": 4096,
         "large_graph_mode": "partition",
         "aggregation_method": "max"
     }

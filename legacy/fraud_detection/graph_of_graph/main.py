@@ -175,16 +175,25 @@ def main():
         ## Ethereum과 BSC의 그래프 특성에 맞춰 하이퍼파라미터 조정
         # batch_size를 적용해서 메모리 사용량을 줄이는 대신, epoch 수를 늘려서 충분히 학습할 수 있도록 합니다.
         if args.chain == 'ethereum' :
-            return ModelCls(
-                hid_dim     =param["hid_dim"],
-                num_layers  =2,
-                epoch       =param["epoch"],
-                lr          =param["lr"],
-                gpu         =args.device,
-                batch_size  =2048,        # Ethereum은 BSC보다 그래프가 크므로 배치 사이즈를 2048로 설정합니다.
-                num_neigh   =24 if (model_name == "DOMINANT" or model_name == "DONE") else 64           
-                # first layer는 최대 48개의 이웃, second layer는 최대 48개의 이웃을 샘플링하여 메모리 사용량을 줄입니다.
-            )
+            if (model_name == "DOMINANT" or model_name == "DONE") :
+                return ModelCls(
+                    hid_dim     =param["hid_dim"],
+                    num_layers  =2,
+                    epoch       =param["epoch"],
+                    lr          =param["lr"],
+                    gpu         =args.device,
+                    batch_size  =2048,        # Ethereum은 BSC보다 그래프가 크므로 배치 사이즈를 2048로 설정합니다.
+                    num_neigh   =24          # model이 DOMINANT와 DONE일 때만 num_neigh를 설정합니다.
+                )
+            else :
+                return ModelCls(
+                    hid_dim     =param["hid_dim"],
+                    num_layers  =2,
+                    epoch       =param["epoch"],
+                    lr          =param["lr"],
+                    gpu         =args.device,
+                    batch_size  =2048,        # Ethereum은 BSC보다 그래프가 크므로 배치 사이즈를 2048로 설정합니다.
+                )
         else :
             return ModelCls(
                 hid_dim     =param["hid_dim"],
@@ -308,7 +317,7 @@ def main():
                 torch.cuda.empty_cache()
 
 
-    RESULT_PATH = f"../../../_data/results/fraud_detection"
+    RESULT_PATH = f"../../results/legacy_benchmark"
     # 결과를 DataFrame으로 변환 후 CSV로 저장 (Batch Script 연동 목적)
     results_df = pd.DataFrame(results)
     final_results_df = pd.DataFrame(final_results)

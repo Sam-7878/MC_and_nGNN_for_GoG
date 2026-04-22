@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import psutil
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -33,9 +34,9 @@ class LegacyAdapterConfig:
     dropout: float = 0.0
 
     # Large Graph Partitioning Settings
-    max_nodes: int = 1500   ## 지금은 Sample size가 작아서 1500으로 설정했지만 나중에는 3000-5000으로 변경해야함
+    max_nodes: int = 4096   ## 지금은 Sample size가 작아서 1500으로 설정했지만 나중에는 3000-5000으로 변경해야함
     large_graph_mode: str = "partition"  # "skip" | "partition"
-    partition_size: int = 1500   ## 지금은 Sample size가 작아서 1500으로 설정했지만 나중에는 3000-5000으로 변경해야함
+    partition_size: int = 4096   ## 지금은 Sample size가 작아서 1500으로 설정했지만 나중에는 3000-5000으로 변경해야함
     partition_overlap: float = 0.0
     aggregation_method: str = "max"     # "max" | "topk_mean"
     
@@ -144,15 +145,31 @@ def _prepare_graph_for_detector(data: Data) -> Data:
 def _repackage_minimal(data: Data) -> Data:
     """
     Keep only the fields required for the legacy detector to save memory.
+    Validates edge_index to prevent CUDA device-side assert (out-of-bounds).
     """
+    num_nodes = data.x.size(0)
+    edge_index = data.edge_index.long()
+
+    # --- Safety: remove any edges referencing out-of-range node indices ---
+    if edge_index.numel() > 0:
+        valid_mask = (edge_index[0] < num_nodes) & (edge_index[1] < num_nodes) \
+                   & (edge_index[0] >= 0) & (edge_index[1] >= 0)
+        if not valid_mask.all():
+            n_invalid = (~valid_mask).sum().item()
+            logger.debug(
+                "[_repackage_minimal] Dropping %d out-of-range edges (num_nodes=%d)",
+                n_invalid, num_nodes
+            )
+            edge_index = edge_index[:, valid_mask]
+
     clean_data = Data(
         x=data.x.float(),
-        edge_index=data.edge_index.long(),
-        num_nodes=data.x.size(0)
+        edge_index=edge_index,
+        num_nodes=num_nodes
     )
     if hasattr(data, "y") and data.y is not None:
         clean_data.y = data.y
-        clean_data.num_nodes = data.x.size(0)
+        clean_data.num_nodes = num_nodes
         
     return clean_data
 
@@ -375,6 +392,14 @@ def _build_detector(
     kwargs = dict(_DEFAULT_DETECTOR_KWARGS.get(key, {}))
     if detector_kwargs:
         kwargs.update(detector_kwargs)
+
+    # Legacy detectors run on CPU by design.
+    # PyGOD's GPU mode triggers CUDA device-side asserts on partitioned
+    # sub-graphs, which permanently corrupts the CUDA context and
+    # cascade-fails the subsequent Revision (nGNN) stages.
+    # To explicitly enable GPU, set "gpu": 0 in best_params JSON.
+    if "gpu" not in kwargs:
+        kwargs["gpu"] = -1
 
     return cls(**kwargs)
 
@@ -708,6 +733,10 @@ class LegacyBatchRunner:
                 logger.info("[LegacyBatchRunner] Cleaning up partition cache for chain '%s'...", self.config.chain)
                 shutil.rmtree(cache_root)
             cache_root.mkdir(parents=True, exist_ok=True)
+        
+        process = psutil.Process()
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
 
         output = LegacyRunOutput(
             model_name=str(model_name),
@@ -784,6 +813,24 @@ class LegacyBatchRunner:
                 output.skipped += 1
                 output.failure_reasons["exception"] = output.failure_reasons.get("exception", 0) + 1
                 if label is not None: output.skipped_labels.append(label)
+
+
+            # --- Resource Telemetry Tracking ---
+            # Node count tracking
+            curr_nodes = num_nodes if num_nodes is not None else 0
+            if curr_nodes > output.max_nodes_processed:
+                output.max_nodes_processed = curr_nodes
+
+            # RAM tracking
+            curr_ram = process.memory_info().rss / (1024 * 1024)
+            if curr_ram > output.peak_ram_mb:
+                output.peak_ram_mb = curr_ram
+            
+            # GPU tracking
+            if torch.cuda.is_available():
+                curr_gpu = torch.cuda.max_memory_allocated() / (1024 * 1024)
+                if curr_gpu > output.peak_gpu_mb:
+                    output.peak_gpu_mb = curr_gpu
 
         logger.info(
             "[LegacyRunner:%s] Done. Scored %d. Full=%d Part=%d (skipped=%d)",
