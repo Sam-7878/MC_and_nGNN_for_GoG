@@ -785,6 +785,8 @@ def run_legacy_baselines(
         return
     
     try:
+        import time
+        _t0 = time.perf_counter()
         batch = LegacyBatchRunner(
             config=             base_adapter_cfg,
             detector_overrides= base_adapter_cfg.detector_overrides,
@@ -825,6 +827,7 @@ def run_legacy_baselines(
                 max_nodes_processed=run_output.max_nodes_processed,
                 peak_ram_mb=run_output.peak_ram_mb,
                 peak_gpu_mb=run_output.peak_gpu_mb,
+                elapsed_sec=time.perf_counter() - _t0,
             )
             table.add(result)
             log.info(str(result))
@@ -849,6 +852,8 @@ def _to_level1_loader(graphs, batch_size, shuffle):
 # - _call_level1_trainer_fit 올바르게 호출
 # ============================================================
 def run_revision_l1(dataset, cfg, table, setting):
+    import time
+    _t0 = time.perf_counter()
     log.info("[Revision L1] Training Level1 model …")
  
     train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
@@ -898,7 +903,8 @@ def run_revision_l1(dataset, cfg, table, setting):
         setting=setting,
         max_nodes_processed=max_nodes,
         peak_ram_mb=peak_ram,
-        peak_gpu_mb=peak_gpu
+        peak_gpu_mb=peak_gpu,
+        elapsed_sec=time.perf_counter() - _t0,
     )
     if hasattr(table, "add"):
         table.add(res)
@@ -911,6 +917,8 @@ def run_revision_l1(dataset, cfg, table, setting):
 # - fallback 직접 호출 제거 (동일 에러 반복 방지)
 # ============================================================
 def run_revision_l1_l2(dataset, cfg, table, setting):
+    import time
+    _t0 = time.perf_counter()
     log.info("[Revision L1+L2] Training Level1 + Level2 …")
  
     train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
@@ -973,7 +981,8 @@ def run_revision_l1_l2(dataset, cfg, table, setting):
         setting=setting,
         max_nodes_processed=max_nodes,
         peak_ram_mb=peak_ram,
-        peak_gpu_mb=peak_gpu
+        peak_gpu_mb=peak_gpu,
+        elapsed_sec=time.perf_counter() - _t0,
     )
     if hasattr(table, "add"):
         table.add(res)
@@ -985,6 +994,8 @@ def run_revision_l1_l2(dataset, cfg, table, setting):
 # - 동일하게 _call_level1_trainer_fit keyword 통일
 # ============================================================
 def run_revision_full(dataset, cfg, table, setting):
+    import time
+    _t0 = time.perf_counter()
     log.info("[Revision Full] Training Level1 + Level2 + Fusion …")
  
     train_graphs, valid_graphs, test_graphs = _get_split_graphs(dataset, cfg, setting)
@@ -1052,7 +1063,8 @@ def run_revision_full(dataset, cfg, table, setting):
         setting=setting,
         max_nodes_processed=max_nodes,
         peak_ram_mb=peak_ram,
-        peak_gpu_mb=peak_gpu
+        peak_gpu_mb=peak_gpu,
+        elapsed_sec=time.perf_counter() - _t0,
     )
     if hasattr(table, "add"):
         table.add(res)

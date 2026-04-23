@@ -98,6 +98,7 @@ class BenchmarkResult:
     max_nodes_processed: int = 0
     peak_ram_mb: float = 0.0
     peak_gpu_mb: float = 0.0
+    elapsed_sec: float = 0.0  # Wall-clock time for this stage (seconds)
 
     # ─── Bootstrap confidence intervals ──────────────────
     ci_roc_auc: Optional[Tuple[float, float]] = None
@@ -156,6 +157,9 @@ class BenchmarkResult:
             sep,
             f"  Samples : {self.num_samples}  "
             f"(+{self.num_pos}  -{self.num_neg}  dropped={self.num_dropped})",
+            f"  RAM     : {self.peak_ram_mb:.1f} MB  "
+            f"GPU: {self.peak_gpu_mb:.1f} MB  "
+            f"Time: {_fmt_time(self.elapsed_sec)}",
             sep,
         ]
         return "\n".join(lines)
@@ -217,7 +221,8 @@ class BenchmarkTable:
             f"{'Model':<25} {'Setting':<18} "
             f"{'ROC-AUC':>8} {'PR-AUC':>8} "
             f"{'Best-F1':>8} {'F1@0.5':>8} "
-            f"{'Pos':>5} {'Neg':>5} {'Drop':>5}"
+            f"{'Pos':>5} {'Neg':>5} {'Drop':>5} "
+            f"{'RAM(MB)':>8} {'GPU(MB)':>8} {'Time':>10}"
         )
         sep = "─" * len(header)
         lines = [sep, header, sep]
@@ -227,7 +232,8 @@ class BenchmarkTable:
                 f"{r.model_name:<25} {r.setting:<18} "
                 f"{_fmt(r.roc_auc):>8} {_fmt(r.pr_auc):>8} "
                 f"{_fmt(r.best_f1):>8} {_fmt(r.f1_at_05):>8} "
-                f"{r.num_pos:>5} {r.num_neg:>5} {r.num_dropped:>5}"
+                f"{r.num_pos:>5} {r.num_neg:>5} {r.num_dropped:>5} "
+                f"{r.peak_ram_mb:>8.1f} {r.peak_gpu_mb:>8.1f} {_fmt_time(r.elapsed_sec):>10}"
             )
 
         lines.append(sep)
@@ -267,6 +273,22 @@ def _fmt(v: float, decimals: int = 4) -> str:
     if v is None or (isinstance(v, float) and not np.isfinite(v)):
         return "  N/A"
     return f"{v:.{decimals}f}"
+
+
+def _fmt_time(seconds: float) -> str:
+    """Format elapsed seconds as human-readable string (e.g. '1h23m', '4m02s', '37.2s')."""
+    if seconds <= 0:
+        return "  -"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    elif seconds < 3600:
+        m = int(seconds // 60)
+        s = int(seconds % 60)
+        return f"{m}m{s:02d}s"
+    else:
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        return f"{h}h{m:02d}m"
 
 
 # ============================================================
@@ -467,6 +489,7 @@ def evaluate_benchmark(
     max_nodes_processed: int = 0,
     peak_ram_mb: float = 0.0,
     peak_gpu_mb: float = 0.0,
+    elapsed_sec: float = 0.0,
 ) -> BenchmarkResult:
     """
     평가 메인 함수.
@@ -598,6 +621,7 @@ def evaluate_benchmark(
         max_nodes_processed=max_nodes_processed,
         peak_ram_mb=peak_ram_mb,
         peak_gpu_mb=peak_gpu_mb,
+        elapsed_sec=elapsed_sec,
         ci_roc_auc=ci_roc_auc,
         ci_pr_auc=ci_pr_auc,
     )

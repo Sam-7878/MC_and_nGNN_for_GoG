@@ -108,6 +108,70 @@ def evaluate_streaming(model, dataset, cfg, setting, train_g, stream_g, stage="l
     
     return yt, ys, unc, latencies
 
+def augment_streaming_dataset(cfg, train_g, stream_g):
+    from gog_fraud.adapters.legacy_adapter import LegacyAdapterConfig, LegacyBatchRunner
+    import torch
+    import logging
+    log = logging.getLogger(__name__)
+    
+    legacy_cfg = _cfg_get(cfg, "legacy", {}) or {}
+    model_names = _cfg_get(legacy_cfg, "models", ["DOMINANT", "DONE", "GAE", "AnomalyDAE", "CoLA"])
+    
+    dataset_cfg = _cfg_get(cfg, "dataset", {}) or {}
+    chain_name = dataset_cfg.get("chain", "polygon").lower()
+
+    base_adapter_cfg = LegacyAdapterConfig(
+        agg_method      = _cfg_get(legacy_cfg, "agg_method", "max"),
+        topk            = int(_cfg_get(legacy_cfg, "topk", 3)),
+        normalize_score = bool(_cfg_get(legacy_cfg, "normalize_score", True)),
+        gpu             = int(_cfg_get(legacy_cfg, "gpu", 0)),
+        hid_dim         = int(_cfg_get(legacy_cfg, "hid_dim", 16)),
+        num_layers      = int(_cfg_get(legacy_cfg, "num_layers", 2)),
+        epoch           = int(_cfg_get(legacy_cfg, "epoch", 50)),
+        lr              = float(_cfg_get(legacy_cfg, "lr", 0.003)),
+        use_best_params = True,
+        chain           = chain_name
+    )
+    
+    all_graphs = train_g + stream_g
+    if not all_graphs:
+        return train_g, stream_g
+        
+    log.info(f"[Augment] Running legacy batch runner on {len(all_graphs)} graphs for models {model_names}")
+    batch = LegacyBatchRunner(
+        config=base_adapter_cfg,
+        detector_overrides=base_adapter_cfg.detector_overrides,
+        score_reduce=base_adapter_cfg.score_reduce,
+        progress_every=base_adapter_cfg.progress_every
+    )
+    
+    all_scores = batch.run_many(model_names=model_names, graphs=all_graphs)
+    
+    contract_to_scores = {}
+    for g in all_graphs:
+        cid = getattr(g, "contract_id", None)
+        if cid is not None:
+            contract_to_scores[cid] = [0.0] * len(model_names)
+            
+    for i, model_name in enumerate(model_names):
+        if model_name in all_scores:
+            for r in all_scores[model_name].records:
+                if r.contract_id in contract_to_scores:
+                    contract_to_scores[r.contract_id][i] = float(r.score)
+                    
+    for g in all_graphs:
+        cid = getattr(g, "contract_id", None)
+        if cid in contract_to_scores:
+            scores = contract_to_scores[cid]
+            data = getattr(g, "graph", g)
+            if hasattr(data, "x") and data.x is not None:
+                score_tensor = torch.tensor(scores, dtype=torch.float, device=data.x.device)
+                score_tensor = score_tensor.expand(data.x.size(0), -1)
+                data.x = torch.cat([data.x, score_tensor], dim=-1)
+                
+    log.info(f"[Augment] Appended {len(model_names)} legacy features to node features.")
+    return train_g, stream_g
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=str)
@@ -147,17 +211,25 @@ def main():
             in_dim_inferred = data_obj.x.size(-1)
             log.info(f"[Streaming Replay] Inferred dynamic in_dim: {in_dim_inferred} from dataset")
 
-    if "level1" not in cfg: cfg["level1"] = {}
-    cfg["level1"]["in_dim"] = in_dim_inferred if in_dim_inferred != 32 else cfg["level1"].get("in_dim", 32)
-    log.info(f"[Streaming Replay] Final Level1 Input Dimension: {cfg['level1']['in_dim']}")
-    
-    # Actually perform the read
+    # Actually perform the streaming split
     train_g, stream_g = dataset.prepare_streaming_splits(tx_root, train_ratio=0.8)
-    
+
     # Optional subsetting
     if args.max_samples and len(stream_g) > args.max_samples:
         log.info(f"[Streaming Replay] Subsetting stream_g to {args.max_samples} samples.")
         stream_g = stream_g[:args.max_samples]
+
+    aug_stages = ["l1_legacy_aug", "l1_l2_legacy_aug"]
+    is_aug = any(s in active_stages for s in aug_stages)
+    if is_aug:
+        train_g, stream_g = augment_streaming_dataset(cfg, train_g, stream_g)
+        legacy_models = _cfg_get(cfg.get("legacy", {}), "models", ["DOMINANT", "DONE", "GAE", "AnomalyDAE", "CoLA"])
+        in_dim_inferred += len(legacy_models)
+        log.info(f"[Streaming Replay] Updated in_dim to {in_dim_inferred} after legacy augmentation.")
+
+    if "level1" not in cfg: cfg["level1"] = {}
+    cfg["level1"]["in_dim"] = in_dim_inferred if in_dim_inferred != 32 else cfg["level1"].get("in_dim", 32)
+    log.info(f"[Streaming Replay] Final Level1 Input Dimension: {cfg['level1']['in_dim']}")
     
     if not stream_g:
         log.error("[Streaming Replay] No samples found in stream_g. Check dataset or --chain.")
@@ -171,9 +243,14 @@ def main():
         if sub_ts:
             log.info(f"[Streaming Replay] Time Range: {min(sub_ts)} - {max(sub_ts)}")
 
-    l1_cache_path = output_dir / f"l1_model_weights_{chain}.pt"
+    l1_cache_path = output_dir / f"l1_model_weights_{chain}{'_aug' if is_aug else ''}.pt"
+    l1_model = None
     
-    log.info("(A) Level 1 Warmup on Historical Context")
+    if "l1" in active_stages or "l1_legacy_aug" in active_stages:
+        is_l1_aug = "l1_legacy_aug" in active_stages
+        stage_name = "Stage 1: Level 1 + StreamMC (Augmented)" if is_l1_aug else "Stage 1: Level 1 + StreamMC"
+        log.info("=" * 50)
+        log.info(f"(A) {stage_name} - Warmup on Historical Context")
     trainer = _build_level1_trainer(cfg)
     if l1_cache_path.exists():
         trainer.model.load_state_dict(torch.load(l1_cache_path))
@@ -186,8 +263,10 @@ def main():
 
     table = BenchmarkTable()
     
-    if "l1" in active_stages:
-        log.info("(B) Streaming Replay Simulation Phase - Level 1")
+    if "l1" in active_stages or "l1_legacy_aug" in active_stages:
+        import time
+        _t0_l1 = time.perf_counter()
+        log.info(f"(B) Streaming Replay Simulation Phase - {stage_name}")
         
         import psutil
         process_stream = psutil.Process()
@@ -216,8 +295,9 @@ def main():
             log.info(f"Triage Utility (Top 5%) -> Gain: {budget_5pct['precision_gain']:.4f} (Cov: {budget_5pct['coverage']:.2%})")
             
             res = evaluate_benchmark(
-                y_true=yt, y_score=ys, model_name="L1-StreamMC", setting=setting,
-                max_nodes_processed=max_nodes_stream, peak_ram_mb=peak_ram_stream, peak_gpu_mb=peak_gpu_stream
+                y_true=yt, y_score=ys, model_name="L1-StreamMC-Aug" if is_l1_aug else "L1-StreamMC", setting=setting,
+                max_nodes_processed=max_nodes_stream, peak_ram_mb=peak_ram_stream, peak_gpu_mb=peak_gpu_stream,
+                elapsed_sec=time.perf_counter() - _t0_l1,
             )
             # Avoid dict assignment to dataclass. Just log the gain.
             log.info(f"Streaming Result for {chain}: ROC-AUC={res.roc_auc:.4f}, PR-AUC={res.pr_auc:.4f}")
@@ -238,10 +318,14 @@ def main():
                 log.info(f"--- Latency (ms) | Avg: {avg_lat:.2f} | P95: {p95:.2f} | P99: {p99:.2f}")
                 log.info(f"--- Throughput: {throughput:.2f} GPS | Peak VRAM: {vram_mb:.1f} MB")
 
-    if "l1_l2" in active_stages and l1_model is not None:
-        log.info("(C) Streaming Replay Simulation Phase - Level 1 + Level 2")
+    if ("l1_l2" in active_stages or "l1_l2_legacy_aug" in active_stages) and l1_model is not None:
+        import time
+        _t0_l1l2 = time.perf_counter()
+        is_l2_aug = "l1_l2_legacy_aug" in active_stages
+        stage_name = "Level 1 + Level 2 + StreamMC (Augmented)" if is_l2_aug else "Level 1 + Level 2 + StreamMC"
+        log.info(f"(C) Streaming Replay Simulation Phase - {stage_name}")
         
-        l2_cache_path = output_dir / f"l2_model_weights_{chain}.pt"
+        l2_cache_path = output_dir / f"l2_model_weights_{chain}{'_aug' if is_l2_aug else ''}.pt"
         l2_trainer = _build_level2_trainer(cfg, l1_model)
         
         if l2_cache_path.exists():
@@ -283,8 +367,9 @@ def main():
             log.info(f"Triage Utility (Top 5%) -> Gain: {budget_5pct['precision_gain']:.4f} (Cov: {budget_5pct['coverage']:.2%})")
             
             res = evaluate_benchmark(
-                y_true=yt, y_score=ys, model_name="L1+L2-StreamMC", setting=setting,
-                max_nodes_processed=max_nodes_stream, peak_ram_mb=peak_ram_stream, peak_gpu_mb=peak_gpu_stream
+                y_true=yt, y_score=ys, model_name="L1+L2-StreamMC-Aug" if is_l2_aug else "L1+L2-StreamMC", setting=setting,
+                max_nodes_processed=max_nodes_stream, peak_ram_mb=peak_ram_stream, peak_gpu_mb=peak_gpu_stream,
+                elapsed_sec=time.perf_counter() - _t0_l1l2,
             )
             log.info(f"Streaming Result for {chain} (L1+L2): ROC-AUC={res.roc_auc:.4f}, PR-AUC={res.pr_auc:.4f}")
             

@@ -1,9 +1,9 @@
-# configs/ngnn_mc/streaming_replay.yaml
+# configs/ngnn_mc/static_benchmark.yaml
 dataset:
   transactions_root: "../_data/dataset/transactions"
   labels_path: "../_data/dataset/labels.csv"
   global_graph_root: "../_data/dataset/global_graph"
-  chain: "polygon"  # Default chain
+  chain: "polygon"  # Default chain, can be overridden via CLI
   auto_split: true
   train_ratio: 0.70
   val_ratio: 0.15
@@ -16,11 +16,6 @@ dataset:
   fraud_categories: null
   load_global_graph: true 
   normalize_features: true
-
-streaming:
-  mode: "virtual" # 'virtual' or 'wallclock'
-  compressed_duration_sec: 3600
-  tick_granularity_sec: 1.0
 
 level1:
   encoder_backend: "ngnn"
@@ -48,22 +43,12 @@ level2:
   hidden_dim: 128
   epochs: 5
   batch_size: 128
+  lr: 0.001
   eval_chunk_size: 16
   train_chunk_size: 16
 
 mc_samples: 8
 dropout_p: 0.10
 
-setting: "ngnn_mc_streaming"
-output_dir: "results/benchmark_ngnn_mc_streaming"
-
-legacy:
-  models: ["DOMINANT", "DONE", "GAE", "AnomalyDAE", "CoLA"]
-  agg_method: "max"
-  topk: 3
-  normalize_score: true
-  gpu: 0
-  hid_dim: 16
-  num_layers: 2
-  epoch: 50
-  lr: 0.003
+setting: "ngnn_mc_static"
+output_dir: "results/benchmark_ngnn_mc_legacy_static"

@@ -24,6 +24,7 @@ dataset/test/
 # test_01/
 # test_02/
 # test_03/
+tests/mock
 
 # intermediate data files
 *.csv
@@ -32,6 +33,6 @@ dataset/test/
 *.txt 
 *.log
 *.png 
-
+*.pkl
 # notes.
 Crypto-GoG_on_DL_notes.txt

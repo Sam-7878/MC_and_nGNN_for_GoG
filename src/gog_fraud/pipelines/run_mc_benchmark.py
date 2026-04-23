@@ -89,6 +89,73 @@ def evaluate_with_mc(model, dataset, cfg, setting, stage="l1", l1_model=None):
     
     return yt[:min_size], ys[:min_size], unc[:min_size], mc_cfg
 
+
+def augment_dataset_with_legacy_scores(dataset, cfg, setting):
+    """Run 5 legacy anomaly detectors on all graphs and append their scores to node features."""
+    from gog_fraud.adapters.legacy_adapter import LegacyAdapterConfig, LegacyBatchRunner
+    import torch
+
+    legacy_cfg = _cfg_get(cfg, "legacy", {}) or {}
+    model_names = _cfg_get(legacy_cfg, "models", ["DOMINANT", "DONE", "GAE", "AnomalyDAE", "CoLA"])
+
+    dataset_cfg = _cfg_get(cfg, "dataset", {}) or {}
+    chain_name = dataset_cfg.get("chain", "polygon").lower()
+
+    base_adapter_cfg = LegacyAdapterConfig(
+        agg_method      = _cfg_get(legacy_cfg, "agg_method", "max"),
+        topk            = int(_cfg_get(legacy_cfg, "topk", 3)),
+        normalize_score = bool(_cfg_get(legacy_cfg, "normalize_score", True)),
+        gpu             = int(_cfg_get(legacy_cfg, "gpu", 0)),
+        hid_dim         = int(_cfg_get(legacy_cfg, "hid_dim", 16)),
+        num_layers      = int(_cfg_get(legacy_cfg, "num_layers", 2)),
+        epoch           = int(_cfg_get(legacy_cfg, "epoch", 50)),
+        lr              = float(_cfg_get(legacy_cfg, "lr", 0.003)),
+        use_best_params = True,
+        chain           = chain_name
+    )
+
+    all_graphs = dataset.train_graphs + dataset.valid_graphs + dataset.test_graphs
+    if not all_graphs:
+        return dataset
+
+    log.info(f"[Augment] Running legacy batch runner on {len(all_graphs)} graphs for models {model_names}")
+    batch = LegacyBatchRunner(
+        config=base_adapter_cfg,
+        detector_overrides=base_adapter_cfg.detector_overrides,
+        score_reduce=base_adapter_cfg.score_reduce,
+        progress_every=base_adapter_cfg.progress_every
+    )
+
+    all_scores = batch.run_many(model_names=model_names, graphs=all_graphs)
+
+    # Build contract_id -> [score_model0, score_model1, ...] mapping
+    contract_to_scores = {}
+    for g in all_graphs:
+        cid = getattr(g, "contract_id", None)
+        if cid is not None:
+            contract_to_scores[cid] = [0.0] * len(model_names)
+
+    for i, model_name in enumerate(model_names):
+        if model_name in all_scores:
+            for r in all_scores[model_name].records:
+                if r.contract_id in contract_to_scores:
+                    contract_to_scores[r.contract_id][i] = float(r.score)
+
+    # Concatenate scores to node features for every graph
+    for g in all_graphs:
+        cid = getattr(g, "contract_id", None)
+        if cid in contract_to_scores:
+            scores = contract_to_scores[cid]
+            data = getattr(g, "graph", g)
+            if hasattr(data, "x") and data.x is not None:
+                score_tensor = torch.tensor(scores, dtype=torch.float, device=data.x.device)
+                score_tensor = score_tensor.expand(data.x.size(0), -1)
+                data.x = torch.cat([data.x, score_tensor], dim=-1)
+
+    log.info(f"[Augment] Appended {len(model_names)} legacy score features to node features.")
+    return dataset
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=str)
@@ -127,15 +194,30 @@ def main():
             log.info(f"[MC Benchmark] Inferred dynamic in_dim: {in_dim_inferred} from dataset")
 
     if "level1" not in cfg: cfg["level1"] = {}
+
+    # Detect if augmentation stages are requested and run Legacy Feature Augmentation
+    aug_stages = ["l1_legacy_aug", "l1_l2_legacy_aug"]
+    is_aug = any(s in active_stages for s in aug_stages)
+    if is_aug:
+        log.info("[MC Benchmark] Legacy Feature Augmentation requested. Running legacy models on all graphs...")
+        dataset = augment_dataset_with_legacy_scores(dataset, cfg, setting)
+        legacy_models = (_cfg_get(cfg.get("legacy", {}), "models", ["DOMINANT", "DONE", "GAE", "AnomalyDAE", "CoLA"]) or [])
+        in_dim_inferred += len(legacy_models)
+        log.info(f"[MC Benchmark] Updated in_dim to {in_dim_inferred} after legacy augmentation.")
+
     cfg["level1"]["in_dim"] = in_dim_inferred if in_dim_inferred != 32 else cfg["level1"].get("in_dim", 32)
     log.info(f"[MC Benchmark] Final Level1 Input Dimension: {cfg['level1']['in_dim']}")
 
-    l1_cache_path = output_dir / f"l1_model_weights_{chain}.pt"
+    l1_cache_path = output_dir / f"l1_model_weights_{chain}{'_aug' if is_aug else ''}.pt"
     l1_model = None
 
-    if "l1" in active_stages:
+    if "l1" in active_stages or "l1_legacy_aug" in active_stages:
+        import time
+        _t0_l1 = time.perf_counter()
+        is_l1_aug = "l1_legacy_aug" in active_stages
+        stage_label = "Stage 1: Level 1 + MC (Legacy-Aug)" if is_l1_aug else "Stage 1: Level 1 + MC"
         log.info("=" * 50)
-        log.info(f"(A) Running Stage 1: Level 1 + MC ({chain}) ...")
+        log.info(f"(A) Running {stage_label} ({chain}) ...")
         train_g, valid_g, test_g = _get_split_graphs(dataset, cfg, setting)
         
         if args.max_samples and len(test_g) > args.max_samples:
@@ -171,8 +253,11 @@ def main():
         peak_gpu_l1_orig = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
         
         res_orig = evaluate_benchmark(
-            y_true=yt_orig, y_score=ys_orig, model_name="L1-Base", setting=setting,
-            max_nodes_processed=max_nodes_l1, peak_ram_mb=peak_ram_l1_orig, peak_gpu_mb=peak_gpu_l1_orig
+            y_true=yt_orig, y_score=ys_orig,
+            model_name="L1-Base-Aug" if is_l1_aug else "L1-Base",
+            setting=setting,
+            max_nodes_processed=max_nodes_l1, peak_ram_mb=peak_ram_l1_orig, peak_gpu_mb=peak_gpu_l1_orig,
+            elapsed_sec=time.perf_counter() - _t0_l1,
         )
         table.add(res_orig)
         
@@ -188,8 +273,11 @@ def main():
             peak_gpu_l1_mc = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
 
             res_mc = evaluate_benchmark(
-                y_true=yt_mc, y_score=ys_mc, model_name="L1-MC", setting=setting,
-                max_nodes_processed=max_nodes_l1, peak_ram_mb=peak_ram_l1_mc, peak_gpu_mb=peak_gpu_l1_mc
+                y_true=yt_mc, y_score=ys_mc,
+                model_name="L1-MC-Aug" if is_l1_aug else "L1-MC",
+                setting=setting,
+                max_nodes_processed=max_nodes_l1, peak_ram_mb=peak_ram_l1_mc, peak_gpu_mb=peak_gpu_l1_mc,
+                elapsed_sec=time.perf_counter() - _t0_l1,
             )
             
             if args.bootstrap:
@@ -219,9 +307,13 @@ def main():
             log.info(f"Triage Utility (Top 1%) -> Gain: {budget_1pct['precision_gain']:.4f} (Cov: {budget_1pct['coverage']:.2%})")
             log.info(f"Triage Utility (Top 5%) -> Gain: {budget_5pct['precision_gain']:.4f} (Cov: {budget_5pct['coverage']:.2%})")
 
-    if "l1_l2" in active_stages and l1_model is not None:
+    if ("l1_l2" in active_stages or "l1_l2_legacy_aug" in active_stages) and l1_model is not None:
+        import time
+        _t0_l1l2 = time.perf_counter()
+        is_l2_aug = "l1_l2_legacy_aug" in active_stages
+        stage_label = "Stage 2: Level 1+L2+MC (Legacy-Aug)" if is_l2_aug else "Stage 2: Level 1 + Level 2 + MC"
         log.info("=" * 50)
-        log.info(f"(B) Running Stage 2: Level 1 + Level 2 + MC ({chain}) ...")
+        log.info(f"(B) Running {stage_label} ({chain}) ...")
         train_g, valid_g, test_g = _get_split_graphs(dataset, cfg, setting)
         l2_trainer = _build_level2_trainer(cfg, l1_model)
         
@@ -250,11 +342,14 @@ def main():
         peak_ram_l1l2_orig = process_l1l2.memory_info().rss / (1024 * 1024)
         peak_gpu_l1l2_orig = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
         
-        res_orig = evaluate_benchmark(
-            y_true=yt_orig, y_score=ys_orig, model_name="L1+L2-Base", setting=setting,
-            max_nodes_processed=max_nodes_l1l2, peak_ram_mb=peak_ram_l1l2_orig, peak_gpu_mb=peak_gpu_l1l2_orig
+        res_l1l2_orig = evaluate_benchmark(
+            y_true=yt_orig, y_score=ys_orig,
+            model_name="L1+L2-Base-Aug" if is_l2_aug else "L1+L2-Base",
+            setting=setting,
+            max_nodes_processed=max_nodes_l1l2, peak_ram_mb=peak_ram_l1l2_orig, peak_gpu_mb=peak_gpu_l1l2_orig,
+            elapsed_sec=time.perf_counter() - _t0_l1l2,
         )
-        table.add(res_orig)
+        table.add(res_l1l2_orig)
         
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
@@ -265,8 +360,11 @@ def main():
             peak_gpu_l1l2_mc = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
             
             res_mc = evaluate_benchmark(
-                y_true=yt_mc, y_score=ys_mc, model_name="L1+L2-MC", setting=setting,
-                max_nodes_processed=max_nodes_l1l2, peak_ram_mb=peak_ram_l1l2_mc, peak_gpu_mb=peak_gpu_l1l2_mc
+                y_true=yt_mc, y_score=ys_mc,
+                model_name="L1+L2-MC-Aug" if is_l2_aug else "L1+L2-MC",
+                setting=setting,
+                max_nodes_processed=max_nodes_l1l2, peak_ram_mb=peak_ram_l1l2_mc, peak_gpu_mb=peak_gpu_l1l2_mc,
+                elapsed_sec=time.perf_counter() - _t0_l1l2,
             )
             
             if args.bootstrap:

@@ -55,7 +55,7 @@ mc_samples: 8
 dropout_p: 0.10
 
 setting: "ngnn_mc_streaming"
-output_dir: "results/benchmark_ngnn_mc_streaming"
+output_dir: "results/benchmark_ngnn_mc_legacy_streaming"
 
 legacy:
   models: ["DOMINANT", "DONE", "GAE", "AnomalyDAE", "CoLA"]
