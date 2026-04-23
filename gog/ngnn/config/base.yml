@@ -1,0 +1,35 @@
+# config/base.yaml
+
+model:
+  node_dim: 64          # ← 실제 local tx node feature 차원으로 교체
+  edge_dim: 32          # ← 실제 local tx edge feature 차원으로 교체
+  hidden_dim: 64
+  global_feat_dim: 64   # ← global_graph["features"] 차원
+  num_classes: 2
+  num_local_layers: 2
+  num_global_layers: 2
+  dropout: 0.3
+  pooling_mode: "attention"    # "attention" | "mean"
+  use_global_gnn: true
+
+train:
+  batch_size: 32
+  lr: 0.001
+  weight_decay: 1e-5
+  num_epochs: 100
+  patience: 10           # early stopping
+  class_weight: [1.0, 5.0]   # fraud 클래스 가중치
+
+mc:
+  enabled: false         # Phase 2/4에서 true
+  n_samples: 10
+
+data:
+  edge_dropout: 0.0      # Phase 3/4에서 0.1 ~ 0.15
+  split_seed: 42
+
+paths:
+  data_dir: "../../../_data/GoG/{chain}/local_graphs"
+  contract_graph: "../../../_data/GoG/{chain}/{chain}_hybrid_graph.pt"
+  model_save: "../../../_data/models/ngnn_{chain}_{phase}.pt"
+  result_dir: "../../../_data/results/fraud_detection_ngnn"

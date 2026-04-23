@@ -140,15 +140,43 @@ def main():
         
         l1_model = trainer.model
         
+        import psutil
+        process_l1 = psutil.Process()
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+        
+        max_nodes_l1 = max(
+            (g.graph.num_nodes if hasattr(g, "graph") else g.num_nodes)
+            for g in test_g
+        ) if test_g else 0
+        
         # Original evaluation
         _, yt_orig, ys_orig = trainer.evaluate(test_g, label_dict=dataset.labels, return_preds=True)
-        res_orig = evaluate_benchmark(y_true=yt_orig, y_score=ys_orig, model_name="L1-Base", setting=setting)
+        
+        peak_ram_l1_orig = process_l1.memory_info().rss / (1024 * 1024)
+        peak_gpu_l1_orig = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+        
+        res_orig = evaluate_benchmark(
+            y_true=yt_orig, y_score=ys_orig, model_name="L1-Base", setting=setting,
+            max_nodes_processed=max_nodes_l1, peak_ram_mb=peak_ram_l1_orig, peak_gpu_mb=peak_gpu_l1_orig
+        )
         table.add(res_orig)
         
+        # Reset memory for MC if we want independent peaks, or just continue. 
+        # Continuing is fine since we want the peak of the whole process.
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+            
         # MC Evaluation
         yt_mc, ys_mc, unc_mc, mc_cfg = evaluate_with_mc(trainer.model, dataset, cfg, setting, stage="l1")
         if yt_mc is not None:
-            res_mc = evaluate_benchmark(y_true=yt_mc, y_score=ys_mc, model_name="L1-MC", setting=setting)
+            peak_ram_l1_mc = process_l1.memory_info().rss / (1024 * 1024)
+            peak_gpu_l1_mc = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+
+            res_mc = evaluate_benchmark(
+                y_true=yt_mc, y_score=ys_mc, model_name="L1-MC", setting=setting,
+                max_nodes_processed=max_nodes_l1, peak_ram_mb=peak_ram_l1_mc, peak_gpu_mb=peak_gpu_l1_mc
+            )
             
             if args.bootstrap:
                 from sklearn.metrics import roc_auc_score, average_precision_score
@@ -190,16 +218,42 @@ def main():
             loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg)
         )
         
+        import psutil
+        process_l1l2 = psutil.Process()
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+            
+        max_nodes_l1l2 = max(
+            (g.num_nodes if hasattr(g, "num_nodes") else g.graph.num_nodes)
+            for g in test_g
+        ) if test_g else 0
+        
         _, yt_orig, ys_orig = l2_trainer.evaluate(
             test_g, label_dict=dataset.labels, global_graph=dataset.global_graph,
             loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg), return_preds=True
         )
-        res_orig = evaluate_benchmark(y_true=yt_orig, y_score=ys_orig, model_name="L1+L2-Base", setting=setting)
+        
+        peak_ram_l1l2_orig = process_l1l2.memory_info().rss / (1024 * 1024)
+        peak_gpu_l1l2_orig = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+        
+        res_orig = evaluate_benchmark(
+            y_true=yt_orig, y_score=ys_orig, model_name="L1+L2-Base", setting=setting,
+            max_nodes_processed=max_nodes_l1l2, peak_ram_mb=peak_ram_l1l2_orig, peak_gpu_mb=peak_gpu_l1l2_orig
+        )
         table.add(res_orig)
         
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+            
         yt_mc, ys_mc, unc_mc, mc_cfg = evaluate_with_mc(l2_trainer.model, dataset, cfg, setting, stage="l2", l1_model=l1_model)
         if yt_mc is not None:
-            res_mc = evaluate_benchmark(y_true=yt_mc, y_score=ys_mc, model_name="L1+L2-MC", setting=setting)
+            peak_ram_l1l2_mc = process_l1l2.memory_info().rss / (1024 * 1024)
+            peak_gpu_l1l2_mc = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+            
+            res_mc = evaluate_benchmark(
+                y_true=yt_mc, y_score=ys_mc, model_name="L1+L2-MC", setting=setting,
+                max_nodes_processed=max_nodes_l1l2, peak_ram_mb=peak_ram_l1l2_mc, peak_gpu_mb=peak_gpu_l1l2_mc
+            )
             
             if args.bootstrap:
                 from sklearn.metrics import roc_auc_score, average_precision_score

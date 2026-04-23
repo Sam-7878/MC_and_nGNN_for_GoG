@@ -171,9 +171,22 @@ def main():
     log.info("(B) Streaming Replay Simulation Phase")
     table = BenchmarkTable()
     
+    import psutil
+    process_stream = psutil.Process()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+        
+    max_nodes_stream = max(
+        (g.graph.num_nodes if hasattr(g, "graph") else g.num_nodes)
+        for g in stream_g
+    ) if stream_g else 0
+    
     yt, ys, unc, latencies = evaluate_streaming(l1_model, dataset, cfg, setting, train_g, stream_g, stage="l1")
     
     if yt is not None:
+        peak_ram_stream = process_stream.memory_info().rss / (1024 * 1024)
+        peak_gpu_stream = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+
         # Triage Analysis
         from gog_fraud.evaluation.mc_metrics import calc_fixed_budget_utility
         budget_50 = calc_fixed_budget_utility(yt, ys, unc, budget=min(50, len(yt)))
@@ -184,7 +197,10 @@ def main():
         log.info(f"Triage Utility (Top 1%) -> Gain: {budget_1pct['precision_gain']:.4f} (Cov: {budget_1pct['coverage']:.2%})")
         log.info(f"Triage Utility (Top 5%) -> Gain: {budget_5pct['precision_gain']:.4f} (Cov: {budget_5pct['coverage']:.2%})")
         
-        res = evaluate_benchmark(y_true=yt, y_score=ys, model_name="L1-StreamMC", setting=setting)
+        res = evaluate_benchmark(
+            y_true=yt, y_score=ys, model_name="L1-StreamMC", setting=setting,
+            max_nodes_processed=max_nodes_stream, peak_ram_mb=peak_ram_stream, peak_gpu_mb=peak_gpu_stream
+        )
         # Avoid dict assignment to dataclass. Just log the gain.
         log.info(f"Streaming Result for {chain}: ROC-AUC={res.roc_auc:.4f}, PR-AUC={res.pr_auc:.4f}")
         

@@ -14,16 +14,16 @@ lightning_logs/
 doc/
 # docs/architecture/
 docs/work_reports/
-GoG/    
+# GoG/    
 result/
 results/
 graphs/
 dataset/test/
 
 # test folders
-test_01/
-test_02/
-test_03/
+# test_01/
+# test_02/
+# test_03/
 
 # intermediate data files
 *.csv
