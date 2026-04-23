@@ -138,6 +138,19 @@ def main():
     dataset = StreamingDataset.from_config(cfg)
     tx_root = cfg.get("dataset", {}).get("transactions_root", "../_data/dataset/transactions")
     
+    # (0) Dynamic in_dim inference from dataset
+    in_dim_inferred = 32
+    if hasattr(dataset, "train_graphs") and len(dataset.train_graphs) > 0:
+        first_item = dataset.train_graphs[0]
+        data_obj = getattr(first_item, "graph", first_item)
+        if hasattr(data_obj, "x") and data_obj.x is not None:
+            in_dim_inferred = data_obj.x.size(-1)
+            log.info(f"[Streaming Replay] Inferred dynamic in_dim: {in_dim_inferred} from dataset")
+
+    if "level1" not in cfg: cfg["level1"] = {}
+    cfg["level1"]["in_dim"] = in_dim_inferred if in_dim_inferred != 32 else cfg["level1"].get("in_dim", 32)
+    log.info(f"[Streaming Replay] Final Level1 Input Dimension: {cfg['level1']['in_dim']}")
+    
     # Actually perform the read
     train_g, stream_g = dataset.prepare_streaming_splits(tx_root, train_ratio=0.8)
     
