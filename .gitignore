@@ -34,5 +34,6 @@ tests/mock
 *.log
 *.png 
 *.pkl
+*.pt
 # notes.
 Crypto-GoG_on_DL_notes.txt

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -705,6 +706,7 @@ def _append_result(
     setting: str,
     cfg: dict,
     table: BenchmarkTable,
+    elapsed_sec: float = 0.0,
 ) -> None:
     contract_ids = [g.contract_id for g in test_graphs]
 
@@ -729,6 +731,7 @@ def _append_result(
         threshold=float(_cfg_get(cfg, "threshold", 0.5)),
         k_list=_cfg_get(cfg, "k_list", [10, 20, 50]),
         bootstrap=bool(_cfg_get(cfg, "bootstrap", True)),
+        elapsed_sec=elapsed_sec,
     )
     table.add(result)
     log.info(str(result))
@@ -1110,8 +1113,13 @@ def _best_effort_save_table(table, out_dir: Path, chain: str = "polygon") -> Non
         return
 
     serializable = []
+    from dataclasses import is_dataclass, asdict
     for row in rows:
-        if hasattr(row, "__dict__"):
+        if hasattr(row, "to_dict") and callable(row.to_dict):
+            serializable.append(row.to_dict())
+        elif is_dataclass(row):
+            serializable.append(asdict(row))
+        elif hasattr(row, "__dict__"):
             serializable.append(dict(row.__dict__))
         else:
             serializable.append(str(row))
@@ -1278,6 +1286,7 @@ def main():
     l1_model = None
 
     if "l1" in active_stages and cfg.get("run_revision_l1", True):
+        _t0_l1 = time.perf_counter()
         log.info("")
         log.info("=" * 50)
         log.info("(B) Running Revision Level1 …")
@@ -1311,12 +1320,15 @@ def main():
             peak_ram_l1 = process_l1.memory_info().rss / (1024 * 1024)
             peak_gpu_l1 = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
 
+            elapsed_sec_l1 = time.perf_counter() - _t0_l1
             res = evaluate_benchmark(
                 y_true=yt, y_score=ys, model_name=m_name, setting=setting,
                 max_nodes_processed=max_nodes_l1,
                 peak_ram_mb=peak_ram_l1,
                 peak_gpu_mb=peak_gpu_l1,
+                elapsed_sec=elapsed_sec_l1,
             )
+            log.info(f"[Benchmark] Stage L1 completed in {elapsed_sec_l1:.2f}s")
             table.add(res)
             _best_effort_save_table(table, output_dir, chain=chain)
 
@@ -1336,6 +1348,7 @@ def main():
 
     # =====================================================================
     if "l1_l2" in active_stages and cfg.get("run_revision_l1_l2", True):
+        _t0_l1l2 = time.perf_counter()
         log.info("")
         log.info("=" * 50)
         log.info("(C) Running Revision Level1 + Level2 …")
@@ -1381,12 +1394,15 @@ def main():
                 peak_ram_l1l2 = process_l1l2.memory_info().rss / (1024 * 1024)
                 peak_gpu_l1l2 = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
 
+                elapsed_sec_l1l2 = time.perf_counter() - _t0_l1l2
                 res = evaluate_benchmark(
                     y_true=yt, y_score=ys, model_name=m_name, setting=setting,
                     max_nodes_processed=max_nodes_l1l2,
                     peak_ram_mb=peak_ram_l1l2,
                     peak_gpu_mb=peak_gpu_l1l2,
+                    elapsed_sec=elapsed_sec_l1l2,
                 )
+                log.info(f"[Benchmark] Stage L1+L2 completed in {elapsed_sec_l1l2:.2f}s")
                 table.add(res)
                 _best_effort_save_table(table, output_dir, chain=chain)
 
@@ -1395,6 +1411,7 @@ def main():
 
     # =====================================================================
     if "full" in active_stages and cfg.get("run_revision_full", True):
+        _t0_full = time.perf_counter()
         log.info("")
         log.info("=" * 50)
         log.info("(D) Running Revision Full …")
@@ -1440,12 +1457,15 @@ def main():
                 peak_ram_full = process_full.memory_info().rss / (1024 * 1024)
                 peak_gpu_full = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
 
+                elapsed_sec_full = time.perf_counter() - _t0_full
                 res = evaluate_benchmark(
                     y_true=yt, y_score=ys, model_name=m_name, setting=setting,
                     max_nodes_processed=max_nodes_full,
                     peak_ram_mb=peak_ram_full,
                     peak_gpu_mb=peak_gpu_full,
+                    elapsed_sec=elapsed_sec_full,
                 )
+                log.info(f"[Benchmark] Stage Full completed in {elapsed_sec_full:.2f}s")
                 table.add(res)
                 _best_effort_save_table(table, output_dir, chain=chain)
 
