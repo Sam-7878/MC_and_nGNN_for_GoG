@@ -109,7 +109,7 @@ def main():
         log.info(f"[MC Benchmark] Chain override: {args.chain}")
 
     setting = str(_cfg_get(cfg, "setting", "strict"))
-    output_dir = Path(args.output or _cfg_get(cfg, "output", "results/benchmark_mc"))
+    output_dir = Path(args.output or _cfg_get(cfg, "output_dir", "results/benchmark_mc"))
     output_dir.mkdir(parents=True, exist_ok=True)
     
     dataset = _build_dataset_from_cfg(cfg)

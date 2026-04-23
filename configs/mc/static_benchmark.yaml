@@ -25,4 +25,4 @@ mc_samples: 8
 dropout_p: 0.10
 
 setting: "mc_static"
-output: "results/mc_static_benchmark"
+output_dir: "results/benchmark_mc_static"

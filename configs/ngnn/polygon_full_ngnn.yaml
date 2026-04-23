@@ -3,7 +3,7 @@
 # Full-System 4-way Benchmark using nGNN for Level 1
 # -------------------------------------------------------
 
-setting: "bsc_ngnn_full_system"
+setting: "polygon_ngnn_full_system"
 output_dir: "results/benchmark_ngnn"
 
 # ── 데이터 ─────────────────────────────────────────────
@@ -11,7 +11,7 @@ dataset:
   transactions_root : "../_data/dataset/transactions"
   labels_path       : "../_data/dataset/labels.csv"
   global_graph_root : "../_data/dataset/global_graph"
-  chain             : "bsc"  # User mentioned BSC
+  chain             : "polygon"  # User mentioned BSC
 
   auto_split        : true
   train_ratio       : 0.70

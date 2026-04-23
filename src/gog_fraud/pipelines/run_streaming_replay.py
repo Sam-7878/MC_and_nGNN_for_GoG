@@ -97,7 +97,7 @@ def evaluate_streaming(model, dataset, cfg, setting, train_g, stream_g, stage="l
             
         if (i + 1) % 50 == 0:
             avg_lat = sum(latencies[-50:]) / 50 * 1000
-            log.info(f"[{i+1}/{total_graphs}] Latency: {avg_lat:.2f}ms. Uncertainty avg: {float(all_unc[-1]):.3f}")
+            log.info(f"[{i+1}/{total_graphs}] Latency: {avg_lat:.2f}ms. Uncertainty avg: {float(all_unc[-1].mean()):.3f}")
             
     if not all_y:
         return None, None, None, None
@@ -112,9 +112,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=str)
     parser.add_argument("--output", required=False, type=str, default=None)
+    parser.add_argument("--stages", required=False, type=str, default="l1,l1_l2")
     parser.add_argument("--chain", required=False, type=str, default=None)
     parser.add_argument("--max_samples", required=False, type=int, default=None)
     args = parser.parse_args()
+
+    active_stages = [s.strip().lower() for s in args.stages.split(",")]
 
     cfg = _load_config(args.config)
     
@@ -125,7 +128,7 @@ def main():
         log.info(f"[Streaming Replay] Chain override: {args.chain}")
 
     setting = str(_cfg_get(cfg, "setting", "strict"))
-    output_dir = Path(args.output or _cfg_get(cfg, "output", "results/streaming_replay"))
+    output_dir = Path(args.output or _cfg_get(cfg, "output_dir", "results/streaming_replay"))
     output_dir.mkdir(parents=True, exist_ok=True)
     
     chain = cfg.get("dataset", {}).get("chain", 'polygon')
@@ -168,57 +171,125 @@ def main():
     
     l1_model = trainer.model
 
-    log.info("(B) Streaming Replay Simulation Phase")
     table = BenchmarkTable()
     
-    import psutil
-    process_stream = psutil.Process()
-    if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats()
+    if "l1" in active_stages:
+        log.info("(B) Streaming Replay Simulation Phase - Level 1")
         
-    max_nodes_stream = max(
-        (g.graph.num_nodes if hasattr(g, "graph") else g.num_nodes)
-        for g in stream_g
-    ) if stream_g else 0
-    
-    yt, ys, unc, latencies = evaluate_streaming(l1_model, dataset, cfg, setting, train_g, stream_g, stage="l1")
-    
-    if yt is not None:
-        peak_ram_stream = process_stream.memory_info().rss / (1024 * 1024)
-        peak_gpu_stream = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
-
-        # Triage Analysis
-        from gog_fraud.evaluation.mc_metrics import calc_fixed_budget_utility
-        budget_50 = calc_fixed_budget_utility(yt, ys, unc, budget=min(50, len(yt)))
-        budget_1pct = calc_fixed_budget_utility(yt, ys, unc, budget=0.01)
-        budget_5pct = calc_fixed_budget_utility(yt, ys, unc, budget=0.05)
-        
-        log.info(f"Triage Utility (Top 50) -> Gain: {budget_50['precision_gain']:.4f} (Cov: {budget_50['coverage']:.2%})")
-        log.info(f"Triage Utility (Top 1%) -> Gain: {budget_1pct['precision_gain']:.4f} (Cov: {budget_1pct['coverage']:.2%})")
-        log.info(f"Triage Utility (Top 5%) -> Gain: {budget_5pct['precision_gain']:.4f} (Cov: {budget_5pct['coverage']:.2%})")
-        
-        res = evaluate_benchmark(
-            y_true=yt, y_score=ys, model_name="L1-StreamMC", setting=setting,
-            max_nodes_processed=max_nodes_stream, peak_ram_mb=peak_ram_stream, peak_gpu_mb=peak_gpu_stream
-        )
-        # Avoid dict assignment to dataclass. Just log the gain.
-        log.info(f"Streaming Result for {chain}: ROC-AUC={res.roc_auc:.4f}, PR-AUC={res.pr_auc:.4f}")
-        
-        table.add(res)
-        table.save_csv(output_dir / f"streaming_results_{chain}.csv")
-        
-        if latencies:
-            avg_lat = np.mean(latencies) * 1000
-            p95 = np.percentile(latencies, 95) * 1000
-            p99 = np.percentile(latencies, 99) * 1000
-            throughput = 1.0 / np.mean(latencies)
+        import psutil
+        process_stream = psutil.Process()
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
             
-            vram_mb = 0
-            if torch.cuda.is_available():
-                vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+        max_nodes_stream = max(
+            (g.graph.num_nodes if hasattr(g, "graph") else g.num_nodes)
+            for g in stream_g
+        ) if stream_g else 0
+        
+        yt, ys, unc, latencies = evaluate_streaming(l1_model, dataset, cfg, setting, train_g, stream_g, stage="l1")
+        
+        if yt is not None:
+            peak_ram_stream = process_stream.memory_info().rss / (1024 * 1024)
+            peak_gpu_stream = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+
+            # Triage Analysis
+            from gog_fraud.evaluation.mc_metrics import calc_fixed_budget_utility
+            budget_50 = calc_fixed_budget_utility(yt, ys, unc, budget=min(50, len(yt)))
+            budget_1pct = calc_fixed_budget_utility(yt, ys, unc, budget=0.01)
+            budget_5pct = calc_fixed_budget_utility(yt, ys, unc, budget=0.05)
+            
+            log.info(f"Triage Utility (Top 50) -> Gain: {budget_50['precision_gain']:.4f} (Cov: {budget_50['coverage']:.2%})")
+            log.info(f"Triage Utility (Top 1%) -> Gain: {budget_1pct['precision_gain']:.4f} (Cov: {budget_1pct['coverage']:.2%})")
+            log.info(f"Triage Utility (Top 5%) -> Gain: {budget_5pct['precision_gain']:.4f} (Cov: {budget_5pct['coverage']:.2%})")
+            
+            res = evaluate_benchmark(
+                y_true=yt, y_score=ys, model_name="L1-StreamMC", setting=setting,
+                max_nodes_processed=max_nodes_stream, peak_ram_mb=peak_ram_stream, peak_gpu_mb=peak_gpu_stream
+            )
+            # Avoid dict assignment to dataclass. Just log the gain.
+            log.info(f"Streaming Result for {chain}: ROC-AUC={res.roc_auc:.4f}, PR-AUC={res.pr_auc:.4f}")
+            
+            table.add(res)
+            table.save_csv(output_dir / f"streaming_results_{chain}.csv")
+            
+            if latencies:
+                avg_lat = np.mean(latencies) * 1000
+                p95 = np.percentile(latencies, 95) * 1000
+                p99 = np.percentile(latencies, 99) * 1000
+                throughput = 1.0 / np.mean(latencies)
                 
-            log.info(f"--- Latency (ms) | Avg: {avg_lat:.2f} | P95: {p95:.2f} | P99: {p99:.2f}")
-            log.info(f"--- Throughput: {throughput:.2f} GPS | Peak VRAM: {vram_mb:.1f} MB")
+                vram_mb = 0
+                if torch.cuda.is_available():
+                    vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+                    
+                log.info(f"--- Latency (ms) | Avg: {avg_lat:.2f} | P95: {p95:.2f} | P99: {p99:.2f}")
+                log.info(f"--- Throughput: {throughput:.2f} GPS | Peak VRAM: {vram_mb:.1f} MB")
+
+    if "l1_l2" in active_stages and l1_model is not None:
+        log.info("(C) Streaming Replay Simulation Phase - Level 1 + Level 2")
+        
+        l2_cache_path = output_dir / f"l2_model_weights_{chain}.pt"
+        l2_trainer = _build_level2_trainer(cfg, l1_model)
+        
+        if l2_cache_path.exists():
+            l2_trainer.model.load_state_dict(torch.load(l2_cache_path))
+            log.info("L2 Historical Warmup weights loaded from cache.")
+        else:
+            log.info("Training L2 on Historical Context...")
+            _call_level2_trainer_fit(
+                trainer=l2_trainer, l1_model=l1_model, cfg=cfg,
+                train_ids=train_g, valid_ids=train_g[:100] if train_g else [], labels=dataset.labels,
+                global_graph=dataset.global_graph,
+                loader_builder=_build_l2_dynamic_loader_builder(l1_model, cfg)
+            )
+            torch.save(l2_trainer.model.state_dict(), l2_cache_path)
+
+        import psutil
+        process_stream = psutil.Process()
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+            
+        max_nodes_stream = max(
+            (g.num_nodes if hasattr(g, "num_nodes") else g.graph.num_nodes)
+            for g in stream_g
+        ) if stream_g else 0
+        
+        yt, ys, unc, latencies = evaluate_streaming(l2_trainer.model, dataset, cfg, setting, train_g, stream_g, stage="l2", l1_model=l1_model)
+        
+        if yt is not None:
+            peak_ram_stream = process_stream.memory_info().rss / (1024 * 1024)
+            peak_gpu_stream = torch.cuda.max_memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+
+            from gog_fraud.evaluation.mc_metrics import calc_fixed_budget_utility
+            budget_50 = calc_fixed_budget_utility(yt, ys, unc, budget=min(50, len(yt)))
+            budget_1pct = calc_fixed_budget_utility(yt, ys, unc, budget=0.01)
+            budget_5pct = calc_fixed_budget_utility(yt, ys, unc, budget=0.05)
+            
+            log.info(f"Triage Utility (Top 50) -> Gain: {budget_50['precision_gain']:.4f} (Cov: {budget_50['coverage']:.2%})")
+            log.info(f"Triage Utility (Top 1%) -> Gain: {budget_1pct['precision_gain']:.4f} (Cov: {budget_1pct['coverage']:.2%})")
+            log.info(f"Triage Utility (Top 5%) -> Gain: {budget_5pct['precision_gain']:.4f} (Cov: {budget_5pct['coverage']:.2%})")
+            
+            res = evaluate_benchmark(
+                y_true=yt, y_score=ys, model_name="L1+L2-StreamMC", setting=setting,
+                max_nodes_processed=max_nodes_stream, peak_ram_mb=peak_ram_stream, peak_gpu_mb=peak_gpu_stream
+            )
+            log.info(f"Streaming Result for {chain} (L1+L2): ROC-AUC={res.roc_auc:.4f}, PR-AUC={res.pr_auc:.4f}")
+            
+            table.add(res)
+            table.save_csv(output_dir / f"streaming_results_{chain}.csv")
+            
+            if latencies:
+                avg_lat = np.mean(latencies) * 1000
+                p95 = np.percentile(latencies, 95) * 1000
+                p99 = np.percentile(latencies, 99) * 1000
+                throughput = 1.0 / np.mean(latencies)
+                
+                vram_mb = 0
+                if torch.cuda.is_available():
+                    vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+                    
+                log.info(f"--- Latency (ms) | Avg: {avg_lat:.2f} | P95: {p95:.2f} | P99: {p99:.2f}")
+                log.info(f"--- Throughput: {throughput:.2f} GPS | Peak VRAM: {vram_mb:.1f} MB")
 
         table.print_summary()
 

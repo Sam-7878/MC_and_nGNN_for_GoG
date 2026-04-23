@@ -26,4 +26,4 @@ mc_samples: 8
 dropout_p: 0.10
 
 setting: "mc_streaming"
-output: "results/mc_streaming_replay"
+output_dir: "results/benchmark_mc_streaming"

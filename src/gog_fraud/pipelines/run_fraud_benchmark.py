@@ -1198,7 +1198,7 @@ def main():
 
     cfg = _load_config(args.config)
     setting = str(_cfg_get(cfg, "setting", "strict"))
-    output_dir = Path(args.output or _cfg_get(cfg, "output", "results/benchmark"))
+    output_dir = Path(args.output or _cfg_get(cfg, "output_dir", "results/benchmark"))
 
     log.info(f"[Benchmark] Config: {args.config}")
     log.info(f"[Benchmark] Setting: {setting}")
@@ -1441,7 +1441,8 @@ def main():
                 log.exception("[Benchmark] Revision Full failed")
 
     # One final implicit serialization catch-all
-    _best_effort_save_table(table, output_dir, chain=chain)
+    # _best_effort_save_table(table, output_dir, chain=chain)
+    ## Note: We rely on intermediate saves after each stage, so we won't do a final save here to avoid overwriting with potentially incomplete results.
 
 
 if __name__ == "__main__":
