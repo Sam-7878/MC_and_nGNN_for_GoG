@@ -830,7 +830,7 @@ def run_legacy_baselines(
                 max_nodes_processed=run_output.max_nodes_processed,
                 peak_ram_mb=run_output.peak_ram_mb,
                 peak_gpu_mb=run_output.peak_gpu_mb,
-                elapsed_sec=time.perf_counter() - _t0,
+                elapsed_sec=run_output.elapsed_sec,
             )
             table.add(result)
             log.info(str(result))

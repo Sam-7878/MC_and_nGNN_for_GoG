@@ -200,7 +200,17 @@ def main():
     is_aug = any(s in active_stages for s in aug_stages)
     if is_aug:
         log.info("[MC Benchmark] Legacy Feature Augmentation requested. Running legacy models on all graphs...")
+        import time
+        from gog_fraud.evaluation.benchmark import BenchmarkResult
+        _t_aug = time.perf_counter()
+        
         dataset = augment_dataset_with_legacy_scores(dataset, cfg, setting)
+        
+        elapsed_aug = time.perf_counter() - _t_aug
+        log.info(f"[MC Benchmark] Legacy Augmentation completed in {elapsed_aug:.2f}s")
+        table.add(BenchmarkResult(model_name="Legacy-Augmentation", elapsed_sec=elapsed_aug, setting=setting))
+        _best_effort_save_table(table, output_dir, chain=chain)
+        
         legacy_models = (_cfg_get(cfg.get("legacy", {}), "models", ["DOMINANT", "DONE", "GAE", "AnomalyDAE", "CoLA"]) or [])
         in_dim_inferred += len(legacy_models)
         log.info(f"[MC Benchmark] Updated in_dim to {in_dim_inferred} after legacy augmentation.")
@@ -382,6 +392,7 @@ def main():
             sel_res = run_selective_prediction(yt_mc, ys_mc, unc_mc, coverage_ratio=0.8)
 
             table.add(res_mc)
+            _best_effort_save_table(table, output_dir, chain=chain)
             
             # Triage Utility Reporting
             budget_50 = calc_fixed_budget_utility(yt_mc, ys_mc, unc_mc, budget=50)

@@ -218,11 +218,21 @@ def main():
     if args.max_samples and len(stream_g) > args.max_samples:
         log.info(f"[Streaming Replay] Subsetting stream_g to {args.max_samples} samples.")
         stream_g = stream_g[:args.max_samples]
+    
+    table = BenchmarkTable()
+    from gog_fraud.evaluation.benchmark import BenchmarkResult
 
     aug_stages = ["l1_legacy_aug", "l1_l2_legacy_aug"]
     is_aug = any(s in active_stages for s in aug_stages)
     if is_aug:
+        import time
+        _t_aug = time.perf_counter()
         train_g, stream_g = augment_streaming_dataset(cfg, train_g, stream_g)
+        elapsed_aug = time.perf_counter() - _t_aug
+        log.info(f"[Streaming Replay] Legacy Augmentation completed in {elapsed_aug:.2f}s")
+        table.add(BenchmarkResult(model_name="Legacy-Augmentation", elapsed_sec=elapsed_aug, setting=setting))
+        _best_effort_save_table(table, output_dir, chain=chain)
+        
         legacy_models = _cfg_get(cfg.get("legacy", {}), "models", ["DOMINANT", "DONE", "GAE", "AnomalyDAE", "CoLA"])
         in_dim_inferred += len(legacy_models)
         log.info(f"[Streaming Replay] Updated in_dim to {in_dim_inferred} after legacy augmentation.")
@@ -261,7 +271,6 @@ def main():
     
     l1_model = trainer.model
 
-    table = BenchmarkTable()
     
     if "l1" in active_stages or "l1_legacy_aug" in active_stages:
         import time
@@ -390,6 +399,7 @@ def main():
                 log.info(f"--- Throughput: {throughput:.2f} GPS | Peak VRAM: {vram_mb:.1f} MB")
 
         table.print_summary()
+        _best_effort_save_table(table, output_dir, chain=chain)
 
 if __name__ == "__main__":
     main()

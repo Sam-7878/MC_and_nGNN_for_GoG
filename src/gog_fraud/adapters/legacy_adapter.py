@@ -146,7 +146,10 @@ def _repackage_minimal(data: Data) -> Data:
     """
     Keep only the fields required for the legacy detector to save memory.
     Validates edge_index to prevent CUDA device-side assert (out-of-bounds).
+    Adds self-loops to ensure all node indices are represented (fixes IndexError in some models).
     """
+    from torch_geometric.utils import add_self_loops, coalesce
+    
     num_nodes = data.x.size(0)
     edge_index = data.edge_index.long()
 
@@ -161,6 +164,11 @@ def _repackage_minimal(data: Data) -> Data:
                 n_invalid, num_nodes
             )
             edge_index = edge_index[:, valid_mask]
+
+    # --- Ensure all nodes are covered by adding self-loops ---
+    # This prevents IndexError in models that convert to dense adj internally (like AnomalyDAE)
+    edge_index, _ = add_self_loops(edge_index, num_nodes=num_nodes)
+    edge_index = coalesce(edge_index)
 
     clean_data = Data(
         x=data.x.float(),
@@ -444,6 +452,7 @@ class LegacyRunOutput:
     max_nodes_processed: int = 0
     peak_ram_mb: float = 0.0
     peak_gpu_mb: float = 0.0
+    elapsed_sec: float = 0.0
 
     def __post_init__(self):
         if self.partition_size_dist is None: self.partition_size_dist = []
@@ -474,6 +483,7 @@ class LegacyRunOutput:
             "max_nodes_processed": self.max_nodes_processed,
             "peak_ram_mb": self.peak_ram_mb,
             "peak_gpu_mb": self.peak_gpu_mb,
+            "elapsed_sec": self.elapsed_sec,
         }
 
 
@@ -719,6 +729,8 @@ class LegacyBatchRunner:
         model_name: str,
         graphs: Sequence[Any],
     ) -> LegacyRunOutput:
+        import time
+        _t_start = time.perf_counter()
         items = _safe_list(graphs)
         total = len(items)
 
@@ -832,9 +844,11 @@ class LegacyBatchRunner:
                 if curr_gpu > output.peak_gpu_mb:
                     output.peak_gpu_mb = curr_gpu
 
+        output.elapsed_sec = time.perf_counter() - _t_start
         logger.info(
-            "[LegacyRunner:%s] Done. Scored %d. Full=%d Part=%d (skipped=%d)",
-            model_name, len(output.records), output.full_graph_count, output.partitioned_graph_count, output.skipped
+            "[LegacyRunner:%s] Done. Scored %d. Full=%d Part=%d (skipped=%d) in %.2fs",
+            model_name, len(output.records), output.full_graph_count, output.partitioned_graph_count, output.skipped,
+            output.elapsed_sec
         )
         return output
 
@@ -925,6 +939,9 @@ class LegacyBatchRunner:
         for i, sub_data in enumerate(subgraphs):
             detector = None
             try:
+                # Sanitize subgraph before fit (ensures self-loops/indexing consistency)
+                sub_data = _repackage_minimal(sub_data)
+                
                 detector = _build_detector(
                     model_name=model_name,
                     detector_kwargs=self._get_detector_kwargs(model_name),
@@ -1034,6 +1051,9 @@ class LegacyBatchRunner:
         for i, sub_data in enumerate(subgraphs):
             detector = None
             try:
+                # Sanitize subgraph before fit (ensures self-loops/indexing consistency)
+                sub_data = _repackage_minimal(sub_data)
+
                 detector = _build_detector(
                     model_name=model_name,
                     detector_kwargs=self._get_detector_kwargs(model_name),
